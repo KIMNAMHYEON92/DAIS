@@ -9,7 +9,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/mocks/setup.ts'],
     alias: {
-      '@types': resolveSource('types'),
+      '@app-types': resolveSource('types'),
       '@core': resolveSource('core'),
       '@infrastructure': resolveSource('infrastructure'),
       '@view': resolveSource('view'),

@@ -9,7 +9,7 @@
    * 심문실 게임플레이 전체 시퀀스 및 예외 처리 흐름도
    * 안드로이드/시스템 상태 전환 테이블 (FSM: State Transition Table) 정의
 [Phase 2] 온디바이스 AI 프롬프트 엔지니어링 및 3단계 기억 시스템 명세
-* 목표: Gemma/Qwen 등 경량 모델의 한계를 극복하고 일관된 페르소나와 장기 기억을 모사하기 위한 명세를 정의합니다.
+* 목표: Gemma 등 경량 모델의 한계를 극복하고 일관된 페르소나와 장기 기억을 모사하기 위한 명세를 정의합니다.
 * 상세 내용:
    * 캐릭터 페르소나 및 가드레일 제어용 System Prompt JSON 표준 구조
    * 단일 모델 기반 1인 다역(Game Master) 멀티 페르소나 제어 프로토콜
@@ -136,7 +136,7 @@ graph TD
     GameManager -->|1. Load Character JSON & Prompt| Context_Manager
 
 
-    Model_Loader -->|2. Allocate Quantized LLM (Gemma-4-E2B / Qwen-1.5B)| WebGPU_API
+    Model_Loader -->|2. Allocate Quantized LLM (Gemma-4-E2B)| WebGPU_API
 
 
     WebGPU_API -->|3. Mount Model weights| VRAM_System
@@ -611,7 +611,7 @@ ________________
 
 
 2. 온디바이스 AI 프롬프트 엔지니어링 및 3단계 기억 시스템 명세
-본 장에서는 VRAM 사양이 제한된 유저의 로컬 환경(WebGPU)에서 Gemma-2-2B, Qwen-2.5-1.5B 등 초경량 언어 모델(SLM)을 사용해 정교한 페르소나를 구현하고, 컨텍스트 윈도우 한계를 타파하기 위한 3단계 기억 관리 알고리즘을 명세합니다.
+본 장에서는 VRAM 사양이 제한된 유저의 로컬 환경(WebGPU)에서 Gemma-4-E2B 등 초경량 언어 모델(SLM)을 사용해 정교한 페르소나를 구현하고, 컨텍스트 윈도우 한계를 타파하기 위한 3단계 기억 관리 알고리즘을 명세합니다.
 
 
 ________________

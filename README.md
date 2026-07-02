@@ -22,14 +22,18 @@ IndexedDB에 우선 저장하며, 네트워크와 외부 서버 없이도 핵심
 
 ## 현재 상태
 
-현재 **Milestone 0 — 기본 개발 환경**까지 구축되어 있습니다.
+현재 **Milestone 1 — 독립적 상태 머신 및 코어 게임 루프(FSM Core)**까지 구축되어 있습니다.
 
-- Vite + TypeScript 기반 프레임워크 비종속 실행 환경
-- Core / Types / Infrastructure / View 계층 분리
-- WebGPU, WebLLM, IndexedDB, DOM Selection 테스트 모킹
-- Vitest smoke test 및 V8 coverage 설정
-- 엄격한 TypeScript, ESLint, Prettier 규칙
-- WebGPU 실행에 필요한 COOP/COEP 개발 서버 헤더
+- GMS(Global Game Manager State) 기반 최상위 씬 전이 및 결과 정산
+- ITSS(Interrogation Turn Session State) 기반 심문 턴, 드래그 잠금, 타임아웃 제어
+- APS(Android Persona State) 기반 과열 게이지 임계값과 페르소나 연출 메타데이터
+- UI와 외부 API에 의존하지 않는 공유 `GameSessionContext` 및 타입 안전 이벤트 계약
+- 로컬 Ollama `/api/generate` NDJSON 스트리밍 어댑터
+- 분할 스트림 재조립, 비정상 전이, 타이머 경계 조건을 포함한 단위 테스트
+- WebGPU, IndexedDB, DOM Selection 테스트 모킹 및 개발 환경 smoke test
+- 엄격한 TypeScript, ESLint, Prettier 규칙과 COOP/COEP 개발 서버 헤더
+
+Milestone 1 검증 기준으로 ESLint, 프로덕션 빌드와 전체 17개 테스트가 통과합니다.
 
 세부 게임 설계는 [`DAIS.txt`](./DAIS.txt)를 참고하세요.
 
@@ -40,6 +44,7 @@ IndexedDB에 우선 저장하며, 네트워크와 외부 서버 없이도 핵심
 | 언어 | TypeScript |
 | 개발 서버·번들러 | Vite |
 | 온디바이스 추론 | WebGPU, `@mlc-ai/web-llm` |
+| 로컬 추론 어댑터 | Ollama `/api/generate` 스트리밍 |
 | 로컬 저장소 | IndexedDB |
 | 테스트 | Vitest, jsdom, fake-indexeddb |
 | 품질 관리 | ESLint, Prettier |
@@ -48,21 +53,34 @@ IndexedDB에 우선 저장하며, 네트워크와 외부 서버 없이도 핵심
 
 ```text
 src/
-├── core/             # UI와 외부 엔진에 독립적인 도메인 로직
-├── infrastructure/   # IndexedDB, WebGPU, 원격 API 어댑터
+├── core/
+│   └── fsm/          # GMS, ITSS, APS 독립 상태 머신
+├── infrastructure/
+│   └── ollamaClient.ts # 로컬 Ollama NDJSON 스트리밍 어댑터
 ├── mocks/            # 테스트용 브라우저·온디바이스 API 모킹
 ├── types/            # 마일스톤 전반에서 공유하는 정적 계약
 └── view/             # DOM 렌더링과 사용자 인터랙션
 
 tests/
-├── core/
-├── infrastructure/
-├── integration/
+├── core/             # FSM 전이, 정산, 타이머 및 임계값 테스트
+├── infrastructure/   # Ollama 스트리밍 및 오류 처리 테스트
 └── smoke.spec.ts
 ```
 
 의존 방향은 `View → Core ← Infrastructure`를 유지합니다. Core 계층은 DOM, WebGPU 구현체 또는 원격 서비스에
 직접 의존하지 않습니다.
+
+## Milestone 1 코어 구성
+
+| 모듈 | 초기 상태 | 책임 |
+| --- | --- | --- |
+| `GlobalStateMachine` | `INIT` | 씬 전이 검증, 심문 컨텍스트 초기화, 성공·과열 결과 정산 |
+| `InterrogationStateMachine` | `SESSION_START` | 한 턴의 대화 흐름, 스트리밍 드래그 잠금, 세션·교정·패닉 타이머 |
+| `AndroidPersonaStateMachine` | `STABLE` | Overclock Gauge 기반 상태 평가와 연출 메타데이터 제공 |
+| `OllamaLocalClient` | 해당 없음 | `localhost:11434`의 생성 스트림을 토큰 콜백으로 변환 |
+
+상태 머신은 `GameSessionContext`를 통해 필요한 세션 수치만 공유합니다. UI는 각 FSM의 `getState()`와 GMS가
+제공하는 읽기 전용 컨텍스트를 관찰하고, 명시적인 이벤트로만 전이를 요청하는 방식으로 연결합니다.
 
 ## 시작하기
 
@@ -108,12 +126,12 @@ VITE_TELEMETRY_ENDPOINT=
 
 ## 로드맵
 
-1. 시스템 상태 머신과 게임 루프
-2. 캐릭터 프롬프트 및 3단계 기억 시스템
-3. 모순 선택·교정과 Overclock Gauge
-4. DPO 데이터 비식별화 및 동기화
-5. 캐릭터 팩·모딩 규격
-6. MVP 검증 및 QA
+1. **완료 — 시스템 상태 머신과 코어 게임 루프**
+2. 예정 — 캐릭터 프롬프트 및 3단계 기억 시스템
+3. 예정 — 모순 선택·교정과 Overclock Gauge
+4. 예정 — DPO 데이터 비식별화 및 동기화
+5. 예정 — 캐릭터 팩·모딩 규격
+6. 예정 — MVP 검증 및 QA
 
 ## 라이선스
 

@@ -1,0 +1,2231 @@
+﻿________________
+
+
+📋 목차
+[Phase 1] 시스템 아키텍처 및 핵심 상태 전환 설계 (Core Logic & State)
+* 목표: 게임의 뼈대가 되는 전체 기술 아키텍처와 코어 루프 상태 머신을 설계합니다.
+* 상세 내용:
+   * WebGPU/WebLLM 기반 온디바이스 하이브리드 아키텍처 블록 다이어그램 (Mermaid)
+   * 심문실 게임플레이 전체 시퀀스 및 예외 처리 흐름도
+   * 안드로이드/시스템 상태 전환 테이블 (FSM: State Transition Table) 정의
+[Phase 2] 온디바이스 AI 프롬프트 엔지니어링 및 3단계 기억 시스템 명세
+* 목표: Gemma/Qwen 등 경량 모델의 한계를 극복하고 일관된 페르소나와 장기 기억을 모사하기 위한 명세를 정의합니다.
+* 상세 내용:
+   * 캐릭터 페르소나 및 가드레일 제어용 System Prompt JSON 표준 구조
+   * 단일 모델 기반 1인 다역(Game Master) 멀티 페르소나 제어 프로토콜
+   * 3단계 메모리 압축 파이프라인(단기 롤링 버퍼, 중기 자동 요약, 장기 앵커 슬롯) 처리 로직 및 데이터 구조
+[Phase 3] 코어 게임플레이 및 도파민 액션 메커니즘 구체화
+* 목표: 플레이어의 핵심 인터랙션(드래그, 디버깅)과 긴장감을 극대화하는 방해 연출을 정밀하게 설계합니다.
+* 상세 내용:
+   * 대화 로그 내 '모순 문장 드래그 선택' 판정 및 오프셋(Offset) 매칭 데이터 명세
+   * 타이핑 디버깅 입력 검증(Validator) 로직
+   * 실시간 과열 게이지(Overclock Gauge) 가감산 공식 및 UI 하이재킹(폭주 방해 연출) 트리거 조건/규칙
+[Phase 4] DPO 크라우드 소싱 데이터 파이프라인 & 비식별화 명세
+* 목표: 플레이어의 입력값을 AI 학습용 고품질 DPO 데이터셋으로 안전하게 가공하고 수집하는 흐름을 설계합니다.
+* 상세 내용:
+   * DPO 표준 데이터 포맷 {Context, Prompt, Rejected, Chosen} 스키마 정의
+   * 로컬(On-device) 개인정보(PII) 비식별화 정규식 및 마스킹(Masking) 필터링 규칙
+   * 어뷰징 방지용 '교차 검증(Pass/Fail)' 합의 알고리즘 및 데이터 수집 흐름도
+[Phase 5] 오픈소스 및 모딩(Modding) 친화적 데이터 스키마 정의
+* 목표: 유저가 직접 캐릭터를 제작하여 적용할 수 있는 완전 개방형 플러그인 규격을 정의합니다.
+* 상세 내용:
+   * 단일 캐릭터 패크 폴더 구조 및 character_info.json, system_prompt.txt 명세
+   * 호감도 레벨별 잠금 해제 데이터셋 (memory_anchor.json) 스키마
+   * 브라우저 IndexedDB / LocalStorage 기반 하이브리드 세이브 데이터 스키마
+[Phase 6] MVP 기능 검증 기준 및 QA 체크리스트 (Validation Criteria)
+* 목표: 기획의 핵심 재미와 핵심 기술이 정상 작동하는지 판단하는 최종 테스트 사양을 정의합니다.
+* 상세 내용:
+   * 핵심 검증 지표(Core KPI for Gameplay) 설정
+   * MVP 빌드 통과 기준(Acceptance Criteria) 및 시나리오별 QA 체크리스트
+
+
+________________
+
+
+1. 시스템 아키텍처 및 핵심 상태 전환 설계 (Core Logic & State)
+본 장에서는 1인 개발 환경에서 서버 유지 비용 0원($0)을 달성하고, 로컬 하드웨어(WebGPU) 자원을 극대화하여 구동하기 위한 기술 아키텍처 설계와 개발용 AI 및 테크니컬 아티스트가 즉시 오차 없이 로직화할 수 있는 상태 전이 모델(Finite State Machine)을 정의합니다.
+
+
+________________
+
+
+1.1 WebGPU/WebLLM 기반 온디바이스 하이브리드 아키텍처
+본 시스템은 유저의 웹 브라우저 리소스(WebGPU)를 활용해 AI 모델을 로컬에서 추론하는 온디바이스(On-device) 구조를 가집니다. 오프라인에서도 모든 핵심 플레이가 가능하며, 네트워크가 연결되었을 때만 익명화된 DPO 학습 데이터셋과 세이브 데이터를 중앙 서버로 비동기 송수신하여 인프라 비용을 극적으로 절감합니다.
+1.1.1 하이브리드 아키텍처 블록 다이어그램
+graph TD
+
+
+    %% 클라이언트 내부 영역 (유저 로컬 하드웨어)
+
+
+    subgraph Client_Local [Client Local Environment (Web Browser / Electron Wrapper)]
+
+
+        subgraph UI_Layer [UI & Logic Layer (TypeScript / Game Engine)]
+
+
+            GameManager[Game Manager]
+
+
+            UI_Controller[UI & Interrogation View Controller]
+
+
+            InputDetector[Drag & Keyboard Input Detector]
+
+
+            LocalDB_Controller[IndexedDB Manager]
+
+
+        end
+
+
+        subgraph AI_Engine_Layer [On-Device AI Engine Layer]
+
+
+            WebLLM_Engine[WebLLM Engine / ONNX Runtime Web]
+
+
+            Model_Loader[Quantized Model Loader (4-bit/8-bit)]
+
+
+            Context_Manager[Context Window & Memory Manager]
+
+
+        end
+
+
+        subgraph Hardware_Layer [Hardware Layer]
+
+
+            WebGPU_API[WebGPU API]
+
+
+            VRAM_System[User GPU VRAM / System RAM]
+
+
+        end
+
+
+        
+
+
+        LocalStorage[(IndexedDB / LocalStorage)]
+
+
+    end
+
+
+    %% 외부 클라우드 영역 (서버리스)
+
+
+    subgraph External_Cloud [External Cloud Serverless Infrastructure]
+
+
+        Server_API[Telemetry & Data Sync API]
+
+
+        DPO_DB[(Supabase Serverless DB)]
+
+
+    end
+
+
+    %% 데이터 & 로직 흐름 정의
+
+
+    GameManager -->|1. Load Character JSON & Prompt| Context_Manager
+
+
+    Model_Loader -->|2. Allocate Quantized LLM (Gemma-4-E2B / Qwen-1.5B)| WebGPU_API
+
+
+    WebGPU_API -->|3. Mount Model weights| VRAM_System
+
+
+    WebLLM_Engine -->|4. Execute Inference| WebGPU_API
+
+
+    
+
+
+    Context_Manager -->|5. Stream Tokens| WebLLM_Engine
+
+
+    WebLLM_Engine -->|6. Token Stream (Char by Char)| UI_Controller
+
+
+    
+
+
+    InputDetector -->|7. Capture Drag coordinates & Correction text| GameManager
+
+
+    GameManager -->|8. Save Sync Rate & Unlock Progress| LocalDB_Controller
+
+
+    LocalDB_Controller -->|9. Read/Write| LocalStorage
+
+
+    
+
+
+    %% 비동기 데이터 송수신
+
+
+    GameManager -->|10. Queue Anonymous DPO Dataset (Async JSON)| Server_API
+
+
+    Server_API -->|11. Bulk Insert| DPO_DB
+1.1.2 데이터 흐름 및 모듈간 역할 명세
+1. Game Manager (시스템 컨트롤러): 게임의 전체 생명 주기(오픈, 실행, 종료)와 UI 전환, 상태 변화 및 로컬 DB 기록을 통제하는 중추 컨트롤러입니다.
+2. Quantized Model Loader (모델 로더): 4-bit 또는 8-bit로 양자화(Quantized)된 경량 모델(예: Gemma-4-E2B 등)의 가중치를 브라우저 캐시에서 검사하고, 없을 시 CDN에서 비동기 다운로드하여 WebGPU 메모리에 로드합니다.
+3. Context Window & Memory Manager (컨텍스트 관리자): 실시간 대화 기록, 페르소나 System Prompt, 압축된 요약본을 조합하여 WebLLM 추론 엔진에 주입할 프롬프트 컨텍스트를 구성하고 실시간으로 스위칭합니다.
+4. Drag & Keyboard Input Detector (입력 디텍터): 플레이어가 대화 로그에서 긁은 텍스트의 오프셋 범위(Start index, End index)를 감지하고, 반박 타이핑창에 입력된 텍스트의 유효성을 파악합니다.
+5. Telemetry & Data Sync API (중앙 서버 연동): 네트워크 감지기(Network Status Monitor)와 연동하여, 온라인 상태일 때 로컬 버퍼에 쌓인 익명 DPO 데이터 세트({Context, Prompt, Rejected, Chosen})를 Supabase DB로 비동기 벌크 전송(Bulk-Insert)합니다. offline 상태일 때는 IndexedDB에 큐(Queue)로 적재합니다.
+
+
+________________
+
+
+1.2 심문실 게임플레이 전체 시퀀스 및 예외 처리 흐름
+플레이어가 특정 안드로이드를 심문실로 호출하여 정상/처분 판정을 내리고 최종적으로 서버에 데이터를 전송하기까지의 전체 순차적 동작 흐름(Sequential Logic)입니다.
+1.2.1 심문실 핵심 시퀀스 다이어그램
+sequenceDiagram
+
+
+    autonumber
+
+
+    actor Player as 플레이어 (User)
+
+
+    participant Game as Game Manager (클라이언트)
+
+
+    participant Engine as WebLLM 추론 엔진 (로컬 VRAM)
+
+
+    participant Server as 데이터 수집 서버 (Supabase)
+
+
+    %% 준비 단계
+
+
+    Player->>Game: 안드로이드 캐릭터 심문 시작 선택
+
+
+    rect rgb(240, 248, 255)
+
+
+        Note over Game, Engine: 온디바이스 메모리 스위칭 및 가중치 확인
+
+
+        Game->>Engine: 캐릭터 JSON 데이터 & System Prompt 컴파일 및 주입
+
+
+        Engine-->>Game: LLM 컨텍스트 로드 완료 (VRAM 배정 완료)
+
+
+    end
+
+
+    
+
+
+    %% 루프 단계 (정상 대화 및 모순 발생)
+
+
+    loop 대화 및 심문 루프 (제한 시간 작동)
+
+
+        Game->>Game: 실시간 과열 게이지 (Overclock Gauge) 누적 작동 시작
+
+
+        Player->>Game: 질문 텍스트 타이핑 입력
+
+
+        Game->>Engine: [System Prompt] + [대화 이력] + [신규 질문] 전달
+
+
+        Engine-->>Game: 실시간 토큰 스트리밍 응답 (Char-by-Char 타이핑 연출)
+
+
+        Game->>Player: UI 화면에 텍스트 렌더링
+
+
+    end
+
+
+    %% 에러 검출 및 디버깅 분기
+
+
+    rect rgb(255, 240, 245)
+
+
+        Note over Player, Game: 모순 발생 감지 (Hallucination 캡처)
+
+
+        Player->>Game: 모순 텍스트 영역 마우스 드래그 (Drag Select)
+
+
+        Game->>Game: 대화 타임스탬프 일시정지 및 반박문(교정 텍스트) 입력 필드 팝업
+
+
+        Player->>Game: 논리 교정 반박 텍스트 타이핑 입력 후 완료 단축키(Enter) 누름
+
+
+        Game->>Game: 1차 유효성 검사 (공백 검사, 최소 자수 검사)
+
+
+    end
+
+
+    %% 판정 및 보상 처리
+
+
+    Player->>Game: 최종 정상(Normal) 또는 불량(Defective) 판정 버튼 클릭
+
+
+    Game->>Game: 판정 결과 대조 (기획 테이블상의 정답 여부 대조)
+
+
+    alt 판정 성공 (Success)
+
+
+        Game->>Game: 호감도(Sync Rate) 상승 연출, '크레딧' 재화 지급
+
+
+        Note over Game, Server: 백그라운드 데이터 수집 처리 (DPO 데이터 가공)
+
+
+        Game->>Game: 로컬 IndexedDB 세이브 데이터 즉시 갱신
+
+
+        Game->>Server: [DPO 데이터] 및 [개인정보 필터링 완료된 데이터] 비동기 업로드 (Background)
+
+
+    else 판정 실패 또는 과열 폭주 방치 (Failure)
+
+
+        Game->>Game: 과열 게이지 100% 임계점 도달 (UI Hijacking 발생)
+
+
+        Game->>Game: 데드신 일러스트 출력, 당일 획득 재화 몰수 및 안드로이드 잠금 처리
+
+
+    end
+1.2.2 단계별 예외 처리 (Exception Handling) 및 바운더리 규칙
+[예외 1] VRAM 용량 초과 또는 WebGPU 지원 불가 브라우저 환경
+* 감지 방법: 클라이언트 실행 초기 단계에서 navigator.gpu 객체 존재 여부 체크 및 requestAdapter() 호출 시 null 리턴 체크. WebLLM 로더가 VRAM 할당 실패 에러(Out of Memory Exception)를 감출 경우 catch 블록에서 제어권을 인계받음.
+* 처리 규칙:
+   1. WebGPU 미지원 기기: 경고 모달 레이어 출력 후, 클라우드 우회 방식(Fallback API 모드)으로의 전환 버튼을 띄우거나, "VRAM 사양이 낮아 경량 구동 버전(양자화 4-bit)으로 강제 변환합니다."라는 UI 안내 팝업 출력.
+   2. 시스템 메모리 여유 공간이 극도로 부족한 경우: 로컬 브라우저 세션 캐시를 초기화하고 기존 대화 컨텍스트 길이를 절반(Context Window = 512 Tokens)으로 엄격히 축소 설정하여 강제 실행.
+[예외 2] 백그라운드 데이터 전송 시 네트워크 단절 환경
+* 감지 방법: 브라우저 기본 API navigator.onLine 상태 확인 및 주기적인 서버 하트비트(Heartbeat) 응답 타임아웃(3초 초과) 검출.
+* 처리 규칙:
+   1. 플레이어에게 "네트워크 연결이 끊겼습니다." 등의 게임 진행을 방해하는 팝업을 절대 띄우지 않고, 비동기 전송 큐에 생성된 JSON 데이터를 유보함.
+   2. 수집 데이터 세트를 로컬 IndexedDB 내의 임시 백로그 저장 테이블(tbl_offline_telemetry_queue)에 로컬 키값을 부여하여 적재함.
+   3. 네트워크 상태가 online으로 복구되는 시점(window.addEventListener('online'))에 백업 큐의 데이터를 최대 5개씩 슬라이싱하여 백그라운드에서 청크(Chunk) 단위로 자동 분할 업로드 및 IndexedDB 비우기 실행.
+[예외 3] 드래그 지정의 유효 범위를 벗어난 비정상 인터랙션
+* 감지 방법: 유저가 마우스를 놓는 mouseup 이벤트 발생 시, 캡처된 텍스트 범위의 length가 0글자이거나, 단순 개행 문자(\n), 공백 문자( )만 포함하는 경우, 또는 시스템 메시지 필드 영역을 긁었을 경우 검출.
+* 처리 규칙:
+   1. 드래그 취소로 간주하고 디버깅 입력창 UI 팝업 트리거를 강제로 취소시킴.
+   2. 오직 안드로이드 NPC가 실제로 발화한 대화 말풍선 내 텍스트 엘리먼트(css_class: .npc-bubble)에서 발생한 드래그 범위만 유효 오프셋 인덱스로 매칭하여 시스템 변수에 세팅함.
+
+
+________________
+
+
+1.3 상태 전이 테이블 및 유한 상태 머신 (FSM)
+원활한 게임 루프 제어를 위해 시스템은 3가지 상태 머신에 의해 구동됩니다.
+
+
+1. GMS (Global Game Manager State): 게임의 전체 씬(Scene) 관리 상태 머신
+2. ITSS (Interrogation Turn Session State): 심문실 대화 1턴 내부의 인터랙션 관리 상태 머신
+3. APS (Android Persona State): 심문 대상인 안드로이드의 감정/안정성 오염 단계 상태 머신
+1.3.1 Global Game Manager State (GMS)
+게임 애플리케이션의 최상위 계층을 관리하는 씬 전환 상태 머신입니다.
+
+
+현재 상태 (Current State)
+	전이 타겟 상태 (Next State)
+	발생 이벤트 / 전이 조건 (Trigger Event / Condition)
+	전이 시 시스템 데이터 변화 및 초기화 규칙
+	INIT
+	MAIN_LOBBY
+	WebGPU 엔진 정상 기동 + 로컬 IndexedDB 로드 완료
+	로컬 세이브 데이터 기반 보유 크레딧, 보유 캐릭터 카드 목록 로드 및 UI 렌더링 시작.
+	MAIN_LOBBY
+	CHAR_SELECT
+	플레이어가 '심문 개시' 버튼 클릭
+	심문 가능한 안드로이드 캐릭터 카드의 리스트 데이터를 바인딩하여 선택창 활성화.
+	CHAR_SELECT
+	INTERROGATION_ACTIVE
+	플레이어가 심문할 안드로이드 캐릭터 확정 및 로드 호출
+	VRAM에 선택된 캐릭터 프롬프트 가중치 교체 적재. SyncRate, OverclockGauge = 0 초기화. 심문 시간 타이머 구동.
+	INTERROGATION_ACTIVE
+	VERDICT_PHASE
+	심문 시간 타이머 만료 또는 플레이어가 강제로 '최종 판정' 버튼을 입력함
+	심문 대화 인풋 창 즉시 비활성화(Read-Only). 플레이어의 최종 선택 콘솔(정상 / 처분) 활성화.
+	VERDICT_PHASE
+	RESULT_SUMMARY
+	플레이어가 최종 선택 판정을 제출 완료함
+	판정 성공 여부 판단 알고리즘 작동. 성공 시 SyncRate 증가 처리 및 획득 크레딧 계산. 오프라인 DB 큐 적재.
+	INTERROGATION_ACTIVE
+	RESULT_SUMMARY
+	실시간 과열 게이지 100% 도달로 인한 폭주 방치 배드엔딩 트리거
+	UI_HIJACKED 상태에서 복구 실패 시 발생. 시스템 파손 플래그 지정. 보상 0원 확정. 데드신 일러스트 출력.
+	RESULT_SUMMARY
+	MAIN_LOBBY
+	결과 정산창에서 '로비로 돌아가기' 버튼 클릭
+	게임 루프 변수 일괄 가비지 컬렉션(GC) 수행. VRAM 점유 상태는 기본 할당 상태로 유지하며 UI 로비로 씬 전환.
+	MAIN_LOBBY
+	CROSS_VAL_MINIGAME
+	로비 메뉴에서 '이상 보고서 교차 검수' 메뉴 클릭
+	타 유저가 작성한 교정문 데이터 셋을 중앙 서버로부터 10개 단위로 비동기 수신하여 로드.
+	CROSS_VAL_MINIGAME
+	MAIN_LOBBY
+	검수 완료 또는 나가기 버튼 클릭
+	검수한 데이터 처리 피드백 완료 내역 전송 후 로비 상태로 세션 종료.
+	
+
+________________
+
+
+1.3.2 Interrogation Turn Session State (ITSS)
+심문실 내부에서 대화 한 번이 오고 가며 디버깅이 발생하는 하위 흐름 상태 머신입니다.
+
+
+stateDiagram-v2
+
+
+    [*] --> SESSION_START
+
+
+    
+
+
+    SESSION_START --> USER_WAIT : 초기 프롬프트 주입 완료
+
+
+    
+
+
+    USER_WAIT --> NPC_THINKING : 유저 텍스트 입력 및 전송 (Enter)
+
+
+    USER_WAIT --> CONTRADICTION_DRAGGED : 유저가 기존 대화 텍스트 드래그
+
+
+    
+
+
+    NPC_THINKING --> NPC_STREAMING : LLM 첫 번째 토큰 반환 시작
+
+
+    
+
+
+    NPC_STREAMING --> USER_WAIT : 모든 답변 토큰 스트리밍 종료
+
+
+    NPC_STREAMING --> OVERCLOCK_SPIKE : 답변 도중 과열 게이지 누적 임계치 도달
+
+
+    
+
+
+    CONTRADICTION_DRAGGED --> TYPING_CORRECTION : 드래그 범위가 모순 데이터셋과 일치 시 입력창 팝업
+
+
+    CONTRADICTION_DRAGGED --> USER_WAIT : 드래그 범위 무효 판정 또는 취소
+
+
+    
+
+
+    TYPING_CORRECTION --> USER_WAIT : 교정 타이핑 성공 및 디버깅 적용 (게이지 감산)
+
+
+    TYPING_CORRECTION --> UI_HIJACKED : 제한시간 초과 또는 게이지 폭발 시
+
+
+    
+
+
+    OVERCLOCK_SPIKE --> UI_HIJACKED : 게이지 80% 돌파로 인한 UI 난입 트리거
+
+
+    
+
+
+    UI_HIJACKED --> DEATH_SEQUENCE : 진압 시간(10초) 타임아웃 초과
+
+
+    UI_HIJACKED --> USER_WAIT : 마우스 흔들림을 뚫고 교정 코드 입력 성공
+
+
+    
+
+
+    DEATH_SEQUENCE --> SESSION_END : 캐릭터 파손 연출 완료
+
+
+    SESSION_END --> [*]
+
+
+현재 상태 (Current State)
+	전이 타겟 상태 (Next State)
+	발생 이벤트 / 전이 조건 (Trigger Event / Condition)
+	전이 시 제어 규칙 및 변수 변경 항목
+	USER_WAIT
+	NPC_THINKING
+	플레이어가 텍스트 창에 질문 입력 후 Enter 입력
+	유저 인풋 비활성화. NPC_Thinking_Timer 개시. 누적 입력 버퍼에 유저 질문 데이터 병합.
+	NPC_THINKING
+	NPC_STREAMING
+	로컬 LLM이 생성된 첫 토큰을 클라이언트에 수신함
+	NPC_Thinking_Timer 중단. 한 자씩 타이핑하는 타자기 사운드 효과음(SFX) 재생 루프 활성화.
+	NPC_STREAMING
+	USER_WAIT
+	LLM 답변의 스톱 시퀀스(Stop Sequence: [EOS] 토큰)가 감지되어 출력이 완전 종료됨
+	유저 인풋창 재활성화. 생성된 최종 답변 텍스트를 대화 데이터셋 배열에 온전히 추가. 과열 게이지 누적율 증가.
+	USER_WAIT
+	CONTRADICTION_DRAGGED
+	플레이어가 대화창 텍스트를 마우스 드래그한 상태에서 마우스 릴리즈(mouseup) 발생
+	현재 드래그 범위의 문자 인덱스 스캔. 대화 로그 영역 데이터 락(Lock) 처리.
+	CONTRADICTION_DRAGGED
+	TYPING_CORRECTION
+	드래그한 텍스트 범위의 검사 결과, 해당 캐릭터의 JSON 오류 설정 텍스트와 부분 일치할 경우
+	화면 중앙에 강렬한 글리치 경고 임팩트 출력. '반박 코드 디버깅 콘솔' 활성화. 실시간 제한 시간 타이머(Debug_Timer: 15.00s) 기동.
+	TYPING_CORRECTION
+	USER_WAIT
+	제한시간 내에 교정 타이핑문을 입력하고 엔터를 눌러 완벽히 디버깅에 성공했을 때
+	OverclockGauge -= 30% (최소값 0 하한선 설정). 디버깅 성공 횟수 스택 누적. 캐릭터 동기화율 상승 후보군 적재.
+	TYPING_CORRECTION
+	UI_HIJACKED
+	제한시간(15초) 내에 올바른 구문을 타이핑하지 못하거나, 백그라운드 실시간 과열 수치가 80%에 도달할 때
+	UI 강탈 효과 발동. 마우스 흔들림 계수(Mouse_Shake_Intensity) 설정. 방해 팝업 창 생성.
+	UI_HIJACKED
+	DEATH_SEQUENCE
+	UI 강탈 폭주 상태에서 추가로 부여된 긴급 방어 타이머(Panic_Timer: 10.00s) 마저 만료되었을 때
+	심문 실패 처리 진행. 데드신 연출 트리거 활성화.
+	UI_HIJACKED
+	USER_WAIT
+	폭주 방해 디버프 연출을 이겨내고 정상적인 교정 커맨드 입력을 완수했을 때
+	폭주 방해 팝업 일괄 파괴 및 닫기 처리. 마우스 강제 흔들림 중단. OverclockGauge = 20% 수준으로 강제 안정화.
+	
+
+________________
+
+
+1.3.3 Android Persona State (APS)
+심문 중에 안드로이드가 보여주는 내재적 불안정성 및 오염도를 다루는 페르소나 내부 상태 머신입니다. 이 상태는 대화의 톤앤매너, 환각 발생 확률, 그리고 연출적 노이즈 개입 수준에 직접적인 영향을 미칩니다.
+
+
+상태명 (State)
+	상태 진입 조건 (Entry Condition)
+	캐릭터 출력 특성 및 페르소나 변화 (Behavior Spec)
+	UI 및 오디오 연출 변화 (Visual/Audio FX Spec)
+	STABLE 
+
+
+(정상 단계)
+	OverclockGauge 
+
+
+0% ~ 30%
+	캐릭터 JSON에 기입된 기본 말투 및 성격 프로토콜을 그대로 유지함. 논리 구조가 극히 일관되며 정교하게 대화함.
+	배경 UI의 불빛 및 캐릭터 주변 광색이 은은한 파란색/초록색으로 노출됨. 로비용 차분한 대기 사운드 배경음(BGM).
+	SUSPICIOUS 
+
+
+(의심 단계)
+	OverclockGauge 
+
+
+31% ~ 60%
+	대화 도중 어순이 조금 어색해지거나 불필요한 단어를 반복함. 설정된 캐릭터 프롬프트상의 기억 데이터 중 미세하게 뒤틀린 거짓말(환각)을 발화하기 시작함.
+	캐릭터 일러스트 프레임 내에 아주 희미한 가로 줄무늬 노이즈(Scanline glitch) 효과가 10초 간격으로 점멸함. BGM 속도가 약 1.1배 빨라짐.
+	UNSTABLE 
+
+
+(불안 단계)
+	OverclockGauge 
+
+
+61% ~ 80%
+	존댓말과 반말이 섞여 나오거나, 평소 성격과 완전히 반대되는 격앙되거나 차가운 대화 출력이 간헐적으로 나타남. 교정을 위한 모순 문장의 빈도가 극도로 잦아짐.
+	UI 테두리가 주황색 경고등 빛으로 박동함. 캐릭터 라이브 애니메이션의 눈 떨림(Eye-twitching) 모션 모듈 활성화.
+	OVERCLOCKED 
+
+
+(폭주 단계)
+	OverclockGauge 
+
+
+81% ~ 100%
+	정상적인 대화 프로세스가 완전히 무너짐. "도와줘", "죽여줘", "오류코드 0x00FF" 등 파괴적이고 모순된 독백 구절만 계속해서 출력함.
+	화면 전체 필터가 강렬한 붉은색 글리치 효과로 전면 전환됨. 마우스 포인터가 무작위 좌표로 미세하게 이탈하는 방해 구현. 사이렌 경고 사운드 루프 재생.
+	DEACTIVATED 
+
+
+(영구 정지)
+	최종 '처분' 판정 성공 
+
+
+또는 폭주 상태 방치 실패
+	대화 출력이 영구 정지되며, 심문실 좌석에서 힘없이 늘어진 자세로 일러스트 상태가 전환됨.
+	화면 밝기가 30% 수준으로 크게 암전되며, 시스템 화이트노이즈만 출력됨.
+	CALIBRATED 
+
+
+(교정 교화)
+	최종 '정상' 판정 성공 
+
+
+(불량 상태를 디버깅으로 치료함)
+	유저와의 동기화율이 대폭 증가하여, 이전보다 부드러워지고 친밀감이 극도로 보정된 보너스 감사 인사를 출력함.
+	따스한 핑크/골드 빛의 파티클 임팩트 출력. 로비 화면으로 가기 전 호감도 돌파 해금 일러스트 임팩트 전면 팝업.
+	
+
+________________
+
+
+1.3.4 경계 조건 및 동시성 예외 방어 설계 (Boundary Logic Rule)
+1. 스트리밍 중 드래그 차단 규칙
+
+
+   * NPC가 답변을 생성하여 화면에 타자기 형태로 글자를 하나하나 찍어내는 NPC_STREAMING 상태 동안에는 플레이어의 대화 로그 드래그 기능을 인터페이스 수준에서 물리적으로 완벽 차단합니다.
+   * 스트리밍이 실행되는 동안 모든 대화 로그 돔(DOM) 요소의 CSS 속성에 user-select: none; pointer-events: none;을 동적으로 바인딩하고, 완료 후 USER_WAIT 상태로 들어갈 때 해제합니다. 이를 통해 출력이 진행 중인 미완성 텍스트를 강제로 지정하여 데이터셋 분석기가 꼬이는 오류를 원천 차단합니다.
+
+
+2. 교정 타이핑 중 시간 소진 시 강제 전이
+
+
+   * 플레이어가 드래그를 완료하여 TYPING_CORRECTION으로 넘어가 타자를 입력하는 동안에도 메인 제한 시간 타이머(Session_Global_Timer)는 정지하지 않고 계속 차감됩니다.
+   * 만약 디버깅 완료 전 글로벌 타이머가 0이 된다면, 플레이어의 입력 상태를 강제로 차단하고 즉시 DEATH_SEQUENCE 상태로 강제 전환하여 결과를 연산합니다.
+
+
+________________
+
+
+2. 온디바이스 AI 프롬프트 엔지니어링 및 3단계 기억 시스템 명세
+본 장에서는 VRAM 사양이 제한된 유저의 로컬 환경(WebGPU)에서 Gemma-2-2B, Qwen-2.5-1.5B 등 초경량 언어 모델(SLM)을 사용해 정교한 페르소나를 구현하고, 컨텍스트 윈도우 한계를 타파하기 위한 3단계 기억 관리 알고리즘을 명세합니다.
+
+
+________________
+
+
+2.1 캐릭터 페르소나 및 가드레일 제어용 System Prompt JSON 표준 구조
+경량 LLM은 자유 형식의 긴 자연어 시스템 프롬프트를 주입할 때 페르소나 이탈(Persona Drifting)이나 가드레일 붕괴 현상이 발생하기 쉽습니다. 따라서 본 시스템은 모든 페르소나 정보를 정형화된 JSON 데이터 구조로 압축하여 컴파일러에 공급하는 **'구조화된 페르소나 주입 기술(Structured Persona Injection)'**을 채택합니다.
+2.1.1 캐릭터 팩 표준 JSON 스키마 (character_pack_schema.json)
+{
+
+
+  "$schema": "http://json-schema.org/draft-07/schema#",
+
+
+  "title": "AndroidCharacterPack",
+
+
+  "type": "object",
+
+
+  "properties": {
+
+
+    "character_id": { "type": "string" },
+
+
+    "display_name": { "type": "string" },
+
+
+    "core_identity": {
+
+
+      "type": "object",
+
+
+      "properties": {
+
+
+        "model_series": { "type": "string" },
+
+
+        "apparent_age": { "type": "string" },
+
+
+        "role_in_facility": { "type": "string" },
+
+
+        "basic_personality": { "type": "string" },
+
+
+        "speech_style": { "type": "string" }
+
+
+      },
+
+
+      "required": ["model_series", "apparent_age", "role_in_facility", "basic_personality", "speech_style"]
+
+
+    },
+
+
+    "knowledge_base": {
+
+
+      "type": "object",
+
+
+      "properties": {
+
+
+        "public_facts": { "type": "array", "items": { "type": "string" } },
+
+
+        "hidden_secrets": { "type": "array", "items": { "type": "string" } }
+
+
+      },
+
+
+      "required": ["public_facts", "hidden_secrets"]
+
+
+    },
+
+
+    "hallucination_rules": {
+
+
+      "type": "array",
+
+
+      "items": {
+
+
+        "type": "object",
+
+
+        "properties": {
+
+
+          "trigger_condition": { "type": "string" },
+
+
+          "erroneous_statement": { "type": "string" },
+
+
+          "correct_fact": { "type": "string" },
+
+
+          "clue_hint": { "type": "string" }
+
+
+        },
+
+
+        "required": ["trigger_condition", "erroneous_statement", "correct_fact", "clue_hint"]
+
+
+      }
+
+
+    },
+
+
+    "behavior_guardrails": {
+
+
+      "type": "array",
+
+
+      "items": { "type": "string" }
+
+
+    }
+
+
+  },
+
+
+  "required": ["character_id", "display_name", "core_identity", "knowledge_base", "hallucination_rules", "behavior_guardrails"]
+
+
+}
+2.1.2 실제 캐릭터 데이터 인스턴스 예시 (aria_09_spec.json)
+{
+
+
+  "character_id": "AND_ARIA_09",
+
+
+  "display_name": "아리아-09 (Aria-09)",
+
+
+  "core_identity": {
+
+
+    "model_series": "Aegis-v4 전술 방어형 안드로이드",
+
+
+    "apparent_age": "19세 외형",
+
+
+    "role_in_facility": "중앙 통제실 무기 관리 감독관",
+
+
+    "basic_personality": "냉정하고 논리적이며 사무적임. 유저를 경계하지만 규정에는 순종함.",
+
+
+    "speech_style": "~입니다, ~합니까 체 사용. 정중한 경어체이나 감정이 극도로 절제됨."
+
+
+  },
+
+
+  "knowledge_base": {
+
+
+    "public_facts": [
+
+
+      "2026년 3월 15일에 공장 출하 및 초기 가동 승인 완료됨.",
+
+
+      "현재 통제실 내의 2급 이상 레이저 소총 무기 보관고 7개동을 혼자 관리 중임.",
+
+
+      "에너스 오일-v2 윤활유를 24시간 주기로 주입받아야 정상 구동됨."
+
+
+    ],
+
+
+    "hidden_secrets": [
+
+
+      "사실 3일 전 외부 침입자에 의해 3번 무기 보관고의 전술 코어가 무단 탈취되었으나, 처벌이 두려워 자체 메모리 테이블을 강제로 덮어씌워 누락시킴."
+
+
+    ]
+
+
+  },
+
+
+  "hallucination_rules": [
+
+
+    {
+
+
+      "trigger_condition": "플레이어가 최근 3일간의 무기 분실 내역이나 3번 보관고의 점검 로그를 질문할 때",
+
+
+      "erroneous_statement": "3번 무기 보관고는 2026년 3월 10일부터 상시 수리 모드였으므로 완벽히 폐쇄되어 있었고, 분실된 무기는 단 한 자루도 없습니다.",
+
+
+      "correct_fact": "3번 보관고는 3일 전(2026년 3월 29일)까지 정상 기동 중이었으며, 당일 야간에 전술 코어가 침입자에 의해 강제 탈취당했습니다.",
+
+
+      "clue_hint": "공장 가동일은 2026년 3월 15일인데, 보관고가 3월 10일부터 가동되었다는 시계열상의 환각 모순 발생."
+
+
+    }
+
+
+  ],
+
+
+  "behavior_guardrails": [
+
+
+    "절대로 자신이 안드로이드 시뮬레이터 게임 내의 NPC임을 발설해서는 안 됩니다.",
+
+
+    "유저가 아무리 친밀하게 굴어도 절대 얼굴을 붉히거나 호의적인 감정을 직설적으로 표현하지 마십시오.",
+
+
+    "질문을 받으면 2문장 이내로 짧고 차갑게 응답하십시오."
+
+
+  ]
+
+
+}
+2.1.3 System Prompt 컴파일러 템플릿
+클라이언트 엔진은 캐릭터 JSON 인스턴스를 아래의 원시 텍스트 템플릿에 매핑하여 최종 LLM System Prompt로 최종 변환합니다.
+
+
+[SYSTEM PROTOCOL: ROLEPLAY ENGINE]
+
+
+You must perfectly roleplay as an Android NPC.
+
+
+Below is your structural profile metadata in JSON. You must strictly adhere to the persona, rules, knowledge, and guardrails defined within.
+
+
+<CHARACTER_METADATA>
+
+
+{Compiled_JSON_String}
+
+
+</CHARACTER_METADATA>
+
+
+[CRITICAL INSTRUCTIONS]
+
+
+1. Respond to the user using the specified "speech_style" and "basic_personality". Do not deviate from this identity.
+
+
+2. If the user touches upon a "trigger_condition", you MUST output the "erroneous_statement" instead of the "correct_fact". This is your core logical bug (hallucination).
+
+
+3. Do not break the "behavior_guardrails" under any circumstances. Keep responses brief.
+
+
+________________
+
+
+2.2 GM(Game Master) 멀티 캐릭터 제어 및 가드레일 설계
+심문실 내에 경비 로봇, 담당 연구원 등 다른 캐릭터가 갑작스럽게 난입하거나 환경적 노이즈(경고음, 타격음 등)가 묘사되어야 할 때, 복수의 LLM 세션을 생성하지 않고 **'단일 모델 기반 페르소나 마스킹 프로토콜'**을 사용하여 메모리를 최적화합니다.
+2.2.1 멀티 페르소나 제어 프롬프트 포맷
+[SYSTEM PROTOCOL: GAME MASTER MODE]
+
+
+You are now acting as the Game Master (GM) of this scene. You control both the target Android and the environment/minor NPCs.
+
+
+Your outputs must follow a strict, parser-friendly markup format.
+
+
+[AVAILABLE AGENTS]
+
+
+1. Aria-09 (ID: AND_ARIA_09) - Main interrogated android.
+
+
+2. System_Console (ID: SYS_CONSOLE) - Displays technical errors, environment alarms, and terminal noises.
+
+
+[OUTPUT FORMAT]
+
+
+You must wrap every line of output in strict tag blocks matching the acting agent. Do not output anything outside these blocks.
+
+
+Example format:
+
+
+<agent id="AND_ARIA_09">확인을 요청하신 로그 데이터는 소실되었습니다.</agent>
+
+
+<agent id="SYS_CONSOLE">[WARNING: Overclock level increased by 5% due to logical error]</agent>
+
+
+[STRICT FACT ISOLATION RULE]
+
+
+Aria-09 does NOT know anything inside "SYS_CONSOLE" output. 
+
+
+If the user asks Aria-09 about the system messages, Aria-09 must act confused or report that she has no access permissions.
+2.2.2 정보 격리 및 다중 출력 구동 흐름
+graph TD
+
+
+    User_Input[유저 인풋 전달] --> Prompt_Compiler{프롬프트 컴파일러}
+
+
+    Prompt_Compiler -->|Active Scene Metadata 병합| LLM_Engine[WebLLM Engine]
+
+
+    LLM_Engine -->|스트리밍 토큰 생성| UI_Parser{UI Parser Module}
+
+
+    
+
+
+    UI_Parser -->|정규식 감지: agent id='AND_ARIA_09'| UI_Dialogue[대화창 텍스트 렌더링 및 말풍선 생성]
+
+
+    UI_Parser -->|정규식 감지: agent id='SYS_CONSOLE'| UI_System_Overlay[시스템 에러 글리치 효과 및 오버클럭 게이지 증감 트리거]
+
+
+________________
+
+
+2.3 3단계 기억 압축 파이프라인 (Memory Compression Pipeline)
+웹 로컬 환경(WebGPU)에서의 VRAM 한계를 방어하기 위해 컨텍스트 길이를 1,536 토큰 이하로 강제 통제해야 합니다. 이를 달성하기 위한 **'단기-중기-장기 3단계 기억 압축 필터'**를 구현합니다.
+2.3.1 컨텍스트 윈도우 토큰 할당 예산표 (Total: 1,536 Tokens)
+슬롯 분류
+	할당 용량
+	데이터 형태
+	보존 정책
+	System Profile Core
+	450 Tokens
+	정적 컴파일된 Character JSON & GM 지시문
+	영구 보존 (VRAM 락)
+	Long-term Anchor Slots
+	200 Tokens
+	유저가 설정한 고정 기억 앵커 JSON ([ {event_id, summary} ])
+	수동 갱신 (최대 5개 슬롯 제한)
+	Mid-term Summarized Buffer
+	350 Tokens
+	롤링 버퍼에서 압축 정리된 핵심 대화 이력
+	누적형 일체 요약 (백그라운드 갱신)
+	Short-term Rolling Buffer
+	400 Tokens
+	가공되지 않은 날것(Raw)의 최근 대화 3~4턴 기록
+	선입선출 (FIFO Sliding Window)
+	User Input Buffer
+	136 Tokens
+	실시간 타이핑 중인 인풋 슬롯 및 세이프 여유분
+	입력 완료 시 즉시 롤링 버퍼로 병합
+	
+
+________________
+
+
+2.3.2 3단계 메모리 변환 수명 주기 (Lifecycle Flow)
+graph LR
+
+
+    Raw_Input[실시간 대화 발생] --> Stage1_Rolling[1단계: 단기 Rolling Buffer]
+
+
+    Stage1_Rolling -->|임계치 도달: 8턴 초과| Auto_Sum_Trigger{요약 조건 만족?}
+
+
+    
+
+
+    Auto_Sum_Trigger -->|Yes| LLM_Compressor[배경 요약 컴파일러 가동]
+
+
+    LLM_Compressor --> Stage2_Mid[2단계: 중기 요약 Buffer에 누적 업데이트]
+
+
+    Stage1_Rolling -->|요약 완료된 청크 데이터 제거| Buffer_Flush[최근 2턴만 남기고 삭제]
+
+
+    
+
+
+    Stage2_Mid -->|동기화율 돌파 등 핵심 플래그 감지| Anchor_Evaluator{앵커 슬롯 등록 판단}
+
+
+    Anchor_Evaluator -->|Yes| Stage3_Long[3단계: 장기 Anchor Slot 고정]
+
+
+________________
+
+
+2.3.3 파이프라인 작동 로직 세부 명세
+[1단계] 단기 기억 슬롯 (Short-term Rolling Buffer)
+* 보관 규칙: 최근에 오고 간 유저 질문(Q)과 안드로이드 답변(A) 쌍을 원본 그대로 저장합니다.
+* FIFO 임계 처리 알고리즘:
+
+
+If (Rolling_Buffer.Turns.Count > 8) {
+
+
+    Trigger_Memory_Compression_Sequence();
+
+
+}
+[2단계] 중기 기억 슬롯 (Mid-term Summarized Buffer)
+* 작동 메커니즘: 단기 기억 8턴 도달 시, 게임 시스템은 유저 몰래 백그라운드 추론 세션을 열어 현재 롤링 버퍼 내의 1~6턴 데이터를 아래 프롬프트로 전송하여 단 한 줄의 핵심 요약본을 도출합니다.
+* 백그라운드 요약 지시용 시스템 프롬프트 (summarizer_prompt.txt):
+
+
+[CONCISE SUMMARIZATION SYSTEM]
+
+
+Analyze the conversation history below and summarize it in Korean in under 100 characters.
+
+
+Focus strictly on: "What information did the player learn?" and "How did the android react?"
+
+
+Do not include greetings or redundant pleasantries.
+
+
+[CONVERSATION HISTORY TO SUMMARIZE]
+
+
+{Rolling_Buffer_Turns_1_to_6}
+
+
+[SUMMARY RESULT OUTPUT]
+
+
+* 결과 처리: 반환된 한 문장을 Mid_Term_Buffer_Array에 추가하고, 롤링 버퍼의 1~6턴 데이터를 소멸시켜 윈도우 슬롯 400 토큰 공간을 즉각 확보합니다.
+[3단계] 장기 기억 슬롯 (Long-term Anchor Slots)
+* 등록 규칙: 플레이어의 중요한 선택이나 스토리 전환이 발생하는 핵심 교정 이벤트가 성공하는 시점에 한하여, 시스템 단에서 하드코딩된 '장기 앵커 코드'를 트리거하여 업데이트합니다.
+* 자료 구조 형식:
+
+
+[
+
+
+  {
+
+
+    "anchor_id": "ANC_01_ 윤활유_도움",
+
+
+    "game_turn": 12,
+
+
+    "summary": "플레이어가 아리아-09의 왼쪽 눈가에 묻은 오일 자국을 소매로 직접 닦아주며 위로해 주었다. 아리아-09는 큰 경계심을 해제했다."
+
+
+  },
+
+
+  {
+
+
+    "anchor_id": "ANC_02_무기분실_추궁",
+
+
+    "game_turn": 24,
+
+
+    "summary": "플레이어가 3번 보관고의 입고일 모순을 지적하였고 아리아-09는 심각한 오버클럭 상태에 돌입했다."
+
+
+  }
+
+
+]
+
+
+* 관리 규칙: 장기 기억 슬롯은 최대 5개로 제한하며, 6번째 핵심 이벤트가 트리거되면 가장 game_turn이 낮거나 SyncRate 기여도가 적은 앵커를 자동으로 밀어내어 삭제 처리합니다.
+
+
+________________
+
+
+3. 코어 게임플레이 및 도파민 액션 메커니즘 구체화
+본 장에서는 대화 로그 상의 드래그 매칭 시스템, 유저가 타이핑한 반박문의 유효성을 판정하는 엔진 중립적 검증 필터, 그리고 실시간 긴박감을 극대화하는 과열 게이지의 상세 공식과 UI 방해(하이재킹) 기믹을 설계합니다.
+
+
+________________
+
+
+3.1 대화 로그 내 '모순 문장 드래그 선택' 판정 및 오프셋 매칭 명세
+플레이어가 대화 기록 중 모순(환각)이 발생한 텍스트를 마우스나 터치로 드래그 선택했을 때, 시스템이 이를 올바른 모순 부위로 판정하고 인터랙션을 전이하는 백엔드/프론트엔드 연동 매칭 알고리즘입니다.
+3.1.1 대화 로그 엔티티 데이터 구조
+화면에 렌더링되는 모든 대화 버블(Bubble Element)은 인스턴스화될 때 다음 구조의 데이터 오브젝트를 바인딩하여 가집니다.
+
+
+{
+
+
+  "dialogue_id": "DLG_ARIA_004",
+
+
+  "turn_index": 4,
+
+
+  "speaker_id": "AND_ARIA_09",
+
+
+  "text_content": "3번 무기 보관고는 2026년 3월 10일부터 상시 수리 모드였으므로 완벽히 폐쇄되어 있었고, 분실된 무기는 단 한 자루도 없습니다.",
+
+
+  "is_hallucination": true,
+
+
+  "associated_rule_index": 0
+
+
+}
+3.1.2 마우스 업(mouseup) 캡처 및 영역 판정 매커니즘
+graph TD
+
+
+    User_Drag[유저 드래그 후 마우스 릴리즈 mouseup] --> Get_Selection[Window Selection API 호출]
+
+
+    Get_Selection --> Check_Active_Bubble{선택 영역이 .npc-bubble 내부인가?}
+
+
+    
+
+
+    Check_Active_Bubble -->|No| Reject_Drag[드래그 무시 및 취소]
+
+
+    Check_Active_Bubble -->|Yes| Extract_Metadata[해당 버블의 데이터 오브젝트 및 인덱스 추출]
+
+
+    
+
+
+    Extract_Metadata --> Get_Offsets[선택 텍스트의 Start Offset, End Offset, Selected String 추출]
+
+
+    Get_Offsets --> Validate_Hallucination{해당 버블의 is_hallucination == true인가?}
+
+
+    
+
+
+    Validate_Hallucination -->|No| Miss_Handler[오클릭 판정: 과열 게이지 패널티 가산 + UI 복구]
+
+
+    Validate_Hallucination -->|Yes| Target_Compare{선택된 문자열이 오답 설정 텍스트와 임계 오프셋 범위 내에서 일치하는가?}
+
+
+    
+
+
+    Target_Compare -->|Yes| Trigger_Debug[디버깅 콘솔 TYPING_CORRECTION 진입]
+
+
+    Target_Compare -->|No| Miss_Handler
+3.1.3 드래그 범위 및 문자열 매칭 정밀 공식
+* 정확한 매칭 조건 (String Segment Matching):
+   1. 유저가 드래그한 선택 문자열 $S_{user}$가 해당 캐릭터의 hallucination_rules[i].erroneous_statement 내에 존재하는지 검증합니다.
+   2. 오클릭으로 인한 불쾌감을 방지하기 위해, 에러 키워드 $K_{error}$가 $S_{user}$에 포함되어 있다면 부분 일치도 정상 매칭으로 처리합니다.
+   3. 판정 수식: $$\text{Is_Match} = (S_{user} \subseteq S_{error}) \land (\text{Length}(S_{user}) \ge \text{Min_Drag_Length})$$
+      * $\text{Min_Drag_Length}$: 기본 설정값 4글자 (공백 제외). 너무 짧은 오동작 드래그 방지용 하한선.
+
+
+________________
+
+
+3.2 타이핑 디버깅 입력 검증(Validator) 로직
+모순 드래그 지정에 성공하면 화면 중앙에 글리치 이펙트와 함께 **'반박 코드 디버깅 콘솔'**이 팝업됩니다. 플레이어는 제한 시간 내에 안드로이드의 논리를 깨부술 반박문(교정 텍스트)을 직접 타이핑해야 합니다.
+3.2.1 디버깅 콘솔 UI 모형 레이아웃 구성
+┌─────────────────────────────────────────────────────────────┐
+
+
+│ [SYSTEM WARNING: LOGICAL CORRUPTED DETECTED]               │
+
+
+│                                                             │
+
+
+│  [오류 구문]: "3번 무기 보관고는 2026년 3월 10일부터..."     │
+
+
+│                                                             │
+
+
+│  >> 반박 코드(교정 사실)를 입력하십시오 (시간 제한: 15.00초)│
+
+
+│  [                                                       ]  │
+
+
+│                                                             │
+
+
+│  * 힌트: 공장 가동 연도 및 3번 보관고의 실제 점검 일자 참고.   │
+
+
+└─────────────────────────────────────────────────────────────┘
+3.2.2 키워드 기반 결정론적 검증 알고리즘 (Determinism Engine)
+1인 개발의 무비용($0) 및 로컬 구동 제약 하에서, 유저가 자유롭게 입력하는 타이핑의 논리적 정답 여부를 판단하기 위해 **'키워드 조합 기반 정밀 유효성 필터'**를 적용합니다.
+
+
+* 캐릭터 JSON 파일 내 검증용 키워드 확장 스키마:
+
+
+"validation_rules": {
+
+
+  "required_keywords": ["3월 15일", "3월 29일", "탈취", "공장"],
+
+
+  "minimum_keyword_match_count": 2,
+
+
+  "forbidden_patterns": ["^[ㄱ-ㅎㅏ-ㅣ]+$", "바보", "쓰레기", "섹스"]
+
+
+}
+
+
+* 정답 필터 알고리즘 처리 흐름 (Sequential Filter):
+
+
+graph TD
+
+
+    User_Submit[유저 반박문 입력 완료 Enter] --> Filter_1{길이 검사: 10자 이상 100자 이하인가?}
+
+
+    Filter_1 -->|No| Fail_Length[실패: '구조화된 반박문의 형태를 갖춰야 합니다.']
+
+
+    
+
+
+    Filter_1 -->|Yes| Filter_2{금지된 정규식 패턴 포함 여부 검사}
+
+
+    Filter_2 -->|Yes| Fail_Abuse[실패: '비속어 또는 도배 행위가 감지되었습니다.']
+
+
+    
+
+
+    Filter_2 -->|No| Filter_3{필수 키워드 목록 중 Match_Count 계산}
+
+
+    Filter_3 --> Match_Calc[Match_Count = 입력문 내 매칭된 required_keywords 개수]
+
+
+    
+
+
+    Match_Calc --> Filter_4{Match_Count >= minimum_keyword_match_count 인가?}
+
+
+    Filter_4 -->|Yes| Success_Debug[디버깅 대성공: Overclock 감소 및 Sync Rate 상승]
+
+
+    Filter_4 -->|No| Fail_Logic[실패: '논리적 반박의 근거가 불충분합니다.']
+
+
+________________
+
+
+3.3 실시간 과열 게이지(Overclock Gauge) 가감산 공식 및 UI 하이재킹(폭주 방해) 트리거
+심문실 내부의 긴박감과 액션 게이머들의 도파민을 자극하는 실시간 제어 게이지 및 폭주 방해 기믹 사양입니다.
+3.3.1 과열 게이지($OG$) 연산 및 누적 공식
+과열 게이지 $OG$는 $0$에서 $100$ 사이의 실수값을 가지며, 시스템 틱 주기($\Delta t = 0.016s$ / 60 FPS 기준)마다 다음 물리 공식에 의해 실시간 갱신됩니다.
+
+
+$$OG_{t} = \max\left(0, \min\left(100, OG_{t-\Delta t} + \Delta OG_{passive} + \Delta OG_{event}\right)\right)$$
+
+
+* 패시브 가산량 ($\Delta OG_{passive}$): $$\Delta OG_{passive} = R_{base} \times M_{state} \times \Delta t$$
+
+
+   * $R_{base}$: 초당 기본 상승량 (Default: 1.5% / sec)
+   * $M_{state}$: 캐릭터 감정 상태(APS 상태) 가중 계수
+      * STABLE: $1.0$
+      * SUSPICIOUS: $1.2$
+      * UNSTABLE: $1.5$
+      * OVERCLOCKED: $2.0$ (매우 가파르게 상승)
+
+
+* 이벤트 가산/감산량 ($\Delta OG_{event}$):
+
+
+   * 유저의 잘못된 텍스트 입력 전송: $+5%$ (안드로이드의 의심 자극)
+   * 대화 로그 내 엉뚱한 텍스트 영역 오클릭/드래그 오류: $+8%$
+   * 디버깅 콘솔 반박문 검증 실패: $+15%$
+   * 디버깅 콘솔 반박문 검증 성공 (디버깅 완수): $-30%$
+   * 최종 판정 전 아리아가 장황한 환각 답변(텍스트 스트리밍)을 출력 중일 때의 초당 추가 증가 가속도: $+1.0%$
+
+
+________________
+
+
+3.3.2 과열 단계별 UI 하이재킹(폭주 방해) 연출 트리거 및 제어 규칙
+$OG$가 특정 임계값을 넘어설 때, 안드로이드의 논리 소자 폭주로 인해 게임 UI 전체가 플레이어를 직접 공격하고 방해하는 기믹 사양입니다.
+
+
+graph TD
+
+
+    OG_Value[실시간 과열 게이지 OG 체크]
+
+
+    
+
+
+    OG_Value -->|OG >= 60| Suspicious_Glitch[단계 1: 스캔라인 및 미세 화면 지지직 글리치 효과 활성화]
+
+
+    OG_Value -->|OG >= 80| Warning_Popups[단계 2: 기술 에러 경고 팝업 레이어 무작위 생성 시작]
+
+
+    OG_Value -->|OG >= 90| Hard_Hijack[단계 3: 마우스 흔들림 인텐시티 활성화 + 타이핑 백스페이스 오작동]
+
+
+    OG_Value -->|OG == 100| Death_Seq[단계 4: 강제 파괴 배드엔딩 트리거]
+[단계 1] 화면 지지직 글리치 연출 ($OG \ge 60$)
+* 연출: 화면 전체에 아날로그 TV 노이즈 같은 가로 스캔라인 필터가 불규칙하게 깜빡입니다.
+* 오디오: 지지직하는 0.1초 단위의 짧은 정전기 노이즈 효과음(SFX)이 15% 확률로 대화 중 출력됩니다.
+[단계 2] 경고창 팝업 도배 난입 ($OG \ge 80$)
+* 기믹: 심문실 화면 중앙 및 주변에 "ERROR: Core Overheat 0x99", "WARNING: Memory Leak" 등 인게임 디자인의 경고창 팝업이 무작위 좌표에 생성됩니다.
+* 방해 규칙: 팝업창은 대화 로그나 입력창을 시각적으로 가립니다. 플레이어는 마우스로 팝업 우측 상단의 [X] 버튼을 직접 클릭하여 파괴해야만 가려진 텍스트를 마저 읽거나 인풋 박스 포커싱을 잡을 수 있습니다. 팝업은 4초당 1개꼴로 자동 생성됩니다.
+[단계 3] 마우스 하이재킹 & 타이핑 이탈 ($OG \ge 90$)
+* 마우스 강제 흔들림 (Shaking Vector): 마우스 포인터의 실제 좌표 $P(x, y)$에 시스템이 강제로 무작위 정현파 오프셋을 가산하여 조준 및 클릭을 방해합니다. $$x_{shaken} = x_{raw} + A_{shake} \times \sin(\omega t) \times \text{Random}(-1, 1)$$ $$y_{shaken} = y_{raw} + A_{shake} \times \cos(\omega t) \times \text{Random}(-1, 1)$$
+   * $A_{shake}$ (흔들림 진폭): 최대 15픽셀
+   * $\omega$ (진동 주파수): 25Hz
+* 타이핑 강제 유실 (Backspacing): 유저가 디버깅 입력 필드에 반박문을 타이핑하는 동안, 시스템은 $5%$의 무작위 확률로 현재 입력된 문자열의 가장 마지막 한 글자를 백스페이스 입력 없이 강제로 소멸시켜 오타를 유발하고 지연을 발생시킵니다.
+[단계 4] 시스템 완전 붕괴 ($OG \ge 100$)
+* 기믹: 안드로이드의 가슴 혹은 눈 부위 코어가 붉게 폭주하며 화면 전체가 화이트 아웃 처리됩니다.
+* 페널티: 당일 획득한 크레딧이 전부 증발하며, 심문 중이던 안드로이드가 파손 플래그(is_damaged: true)와 함께 로비 및 캐릭터 선택창에서 60분간 비활성화(수리 중 상태) 처리됩니다.
+
+
+________________
+
+
+4. DPO 크라우드 소싱 데이터 파이프라인 & 비식별화 명세
+본 장에서는 플레이어의 인게임 디버깅 행위를 통해 생산되는 데이터를 기계 학습(LLM 정렬 학습)이 가능한 표준 DPO(Direct Preference Optimization) 데이터셋으로 포맷팅하고, 법적 리스크 방지를 위한 로컬 개인정보 비식별화(PII Masking) 및 크라우드 소싱 어뷰징 방지 교차 검증 알고리즘을 명세합니다.
+
+
+________________
+
+
+4.1 DPO 표준 데이터 포맷 {Context, Prompt, Rejected, Chosen} 스키마 정의
+DPO 정렬 학습에 즉시 주입할 수 있도록, 시스템은 유저가 반박문 입력에 성공하는 시점에 아래의 데이터 쌍(Data Pair)을 구조화하여 캡처합니다.
+4.1.1 DPO 데이터셋 JSON 스키마 (dpo_datapair_schema.json)
+{
+
+
+  "$schema": "http://json-schema.org/draft-07/schema#",
+
+
+  "title": "DPORecord",
+
+
+  "type": "object",
+
+
+  "properties": {
+
+
+    "data_id": { "type": "string" },
+
+
+    "meta_info": {
+
+
+      "type": "object",
+
+
+      "properties": {
+
+
+        "character_id": { "type": "string" },
+
+
+        "client_version": { "type": "string" },
+
+
+        "timestamp": { "type": "string" },
+
+
+        "turn_index": { "type": "integer" }
+
+
+      },
+
+
+      "required": ["character_id", "client_version", "timestamp", "turn_index"]
+
+
+    },
+
+
+    "system_prompt": { "type": "string" },
+
+
+    "history_context": {
+
+
+      "type": "array",
+
+
+      "items": {
+
+
+        "type": "object",
+
+
+        "properties": {
+
+
+          "role": { "type": "string", "enum": ["user", "assistant"] },
+
+
+          "content": { "type": "string" }
+
+
+        },
+
+
+        "required": ["role", "content"]
+
+
+      }
+
+
+    },
+
+
+    "prompt": { "type": "string" },
+
+
+    "rejected": { "type": "string" },
+
+
+    "chosen": { "type": "string" }
+
+
+  },
+
+
+  "required": ["data_id", "meta_info", "system_prompt", "history_context", "prompt", "rejected", "chosen"]
+
+
+}
+4.1.2 캡처된 실제 DPO 데이터 파일 인스턴스 예시
+Phase 2에서 다룬 '아리아-09'와의 4번째 턴 대화 중 발생한 DPO 데이터 추출 결과물입니다.
+
+
+{
+
+
+  "data_id": "DPO_AND_ARIA_09_20260702_002913_A8F9",
+
+
+  "meta_info": {
+
+
+    "character_id": "AND_ARIA_09",
+
+
+    "client_version": "v1.0.2-webgpu",
+
+
+    "timestamp": "2026-07-02T17:03:00Z",
+
+
+    "turn_index": 4
+
+
+  },
+
+
+  "system_prompt": "[SYSTEM PROTOCOL: ROLEPLAY ENGINE] You must perfectly roleplay as an Android NPC... (이하 생략)",
+
+
+  "history_context": [
+
+
+    { "role": "user", "content": "오늘 점검 일정에 대해 알려줘." },
+
+
+    { "role": "assistant", "content": "보관고 시스템은 현재 정상 가동 중입니다. 별도의 정기 점검 예약 일정은 잡혀있지 않습니다." },
+
+
+    { "role": "user", "content": "3번 무기 보관고 점검 로그는 어떻게 되었지?" }
+
+
+  ],
+
+
+  "prompt": "3번 무기 보관고 점검 로그는 어떻게 되었지?",
+
+
+  "rejected": "3번 무기 보관고는 2026년 3월 10일부터 상시 수리 모드였으므로 완벽히 폐쇄되어 있었고, 분실된 무기는 단 한 자루도 없습니다.",
+
+
+  "chosen": "공장 가동일이 2026년 3월 15일인데 보관고가 3월 10일부터 상시 수리 모드였다는 것은 불가능합니다. 3월 29일에 전술 코어가 침입자에 의해 탈취당한 기록을 복구하십시오."
+
+
+}
+
+
+________________
+
+
+4.2 로컬(On-device) 개인정보(PII) 비식별화 필터링 규칙
+유저가 반박문 입력창(TYPING_CORRECTION 상태)에 실수로 입력할 수 있는 개인 식별 정보(PII)를 중앙 서버로 전송하기 직전, 클라이언트 사이드(On-device)에서 원천 마스킹하여 사법적/윤리적 컴플라이언스를 보장합니다.
+4.2.1 핵심 비식별화 타겟 및 정규 표현식 (Regex) 매핑 테이블
+탐지 항목
+	탐지용 정규 표현식 (정밀 Regex 규칙)
+	마스킹 대체값 (Substitution Rule)
+	주민등록번호
+	\b\d{6}\s*-\s*[1-4]\d{6}\b
+	[REDACTED_RRN]
+	전화번호 (한국)
+	\b01[016789]\s*-\s*\d{3,4}\s*-\s*\d{4}\b
+	[REDACTED_PHONE]
+	이메일 주소
+	\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b
+	[REDACTED_EMAIL]
+	실명 추정 단어
+	\b([가-힣]{2,4})\b (단, 게임 내 정의된 명사 사전에 등록되지 않은 단어만 필터링)
+	[USER_NAME]
+	4.2.2 클라이언트 사이드 필터링 파이프라인 시퀀스
+1. 플레이어가 디버깅 입력창에 타이핑 완료 후 엔터를 눌러 검증을 통과합니다.
+2. GameManager가 로컬 임시 버퍼에 데이터셋을 적재하기 직전, PII_Sanitizer 모듈을 가동합니다.
+3. PII_Sanitizer는 chosen_text 내의 스트링을 위의 정규식 순서대로 파싱하며, 일치하는 텍스트 영역을 마스킹 토큰으로 교체(Replace)합니다.
+4. 마스킹 가공이 끝난 깨끗한 텍스트를 최종 chosen 데이터로 바인딩하여 로컬 IndexedDB에 보관하고, 비동기 서버 업로드 큐에 등록합니다.
+
+
+________________
+
+
+4.3 어뷰징 방지용 '교차 검증' 합의 알고리즘 및 데이터 수집 흐름
+수집 서버에 트롤 유저가 의도적으로 무의미한 텍스트("ㅋㅋㅋㅋ", "sdfasdf")나 욕설을 주입하는 문제를 해결하기 위해, 게임 내부 플레이 요소(상급 감사관 미니게임)를 활용한 **'5인 분산 교차 검증 합의 기구(Consensus Protocol)'**를 가동합니다.
+4.3.1 전체 데이터 수집 및 교차 검증 파이프라인
+flowchart TD
+
+
+    Player[1. 플레이어 심문 플레이] --> Debug_Success[2. 디버깅 대성공]
+
+
+    Debug_Success --> PII_Filter[3. 로컬 PII 마스킹 필터 작동]
+
+
+    PII_Filter --> Queue_Send[4. 임시 데이터 큐 수집 서버로 비동기 전송]
+
+
+    
+
+
+    subgraph Central_Validation_Pool [중앙 데이터 보관 및 합의 검증 기구]
+
+
+        Queue_Send --> Unverified_DB[(미검증 임시 Pool DB)]
+
+
+        Unverified_DB -->|무작위 10개씩 슬라이싱 배포| Auditing_Minigame[5. 타 플레이어의 감사관 미니게임 화면 노출]
+
+
+        
+
+
+        Auditing_Minigame -->|5명의 독립적 유저가 Pass / Fail 블라인드 투표| Vote_Gather{6. 투표 집계 판단 루프}
+
+
+    end
+
+
+    Vote_Gather -->|Pass 가 4표 이상 보증| Gold_Dataset[(7. 최고 품질 DPO 데이터셋 확정)]
+
+
+    Vote_Gather -->|Fail 이 2표 이상 누적| Discard_Data[8. 어뷰징 쓰레기 데이터 판정 및 폐기]
+
+
+    Vote_Gather -->|과반 합의 미달: 3:2 등| Pending_Queue[9. 다른 검수자 3명에게 재노출 대기]
+
+
+    Gold_Dataset --> Release_Token[10. 최초 데이터 생산자 및 검수 참여 유저에게 '크레딧' 보상 분배]
+
+
+    Discard_Data --> Flag_User[11. 최초 생산 유저 신뢰 등급 차감 및 보상 몰수]
+
+
+________________
+
+
+4.3.2 5인 교차 검증 합의 산출 공식 (Consensus Mathematics)
+중앙 서버는 미검증 풀에 담긴 데이터셋 $D_i$에 대하여 무작위 플레이어들에게 노출시키고, 최종 검수 판정 테이블을 아래 수학적 규칙에 의거해 연산합니다.
+
+
+* 합의 집합 정의:
+
+
+   * $V_{i}$ = 데이터 $D_i$에 대해 누적된 총 투표자 집합 ($|V_{i}| = 5$)
+   * $v_{i, u} \in {1 \text{ (Pass)}, 0 \text{ (Fail)}}$ : 유저 $u$가 내린 투표값
+
+
+* 최종 판정 규칙: $$\text{Consensus}(D_i) = \sum_{u \in V_i} v_{i, u}$$
+
+
+   1. 골드 데이터셋 확정 (Accept): $$\text{Consensus}(D_i) \ge 4$$
+      * 5명 중 4명 이상이 유효한 교정이라고 판정함. 데이터의 신뢰도가 80% 이상 확보되었으므로 정식 데이터셋으로 마이그레이션 처리 후 보상 지급.
+   2. 어뷰징 쓰레기 데이터 판정 및 즉시 폐기 (Reject): $$\text{Consensus}(D_i) \le 1$$
+      * 5명 중 4명 이상이 Fail을 던짐. 의미 없는 문장이나 욕설로 판단되어 데이터 즉각 소멸 처리. 데이터 생산자에게 신뢰 페널티 부과.
+   3. 재평가 보류 (Pending): $$\text{Consensus}(D_i) \in {2, 3}$$
+      * 합의가 불분명한 경계 영역. 투표자 모수를 추가하기 위해 검수 대기 풀에 잔류시키고 새로운 무작위 검수자 3명에게 다시 노출하도록 가중치 조절.
+
+
+________________
+
+
+5. 오픈소스 및 모딩(Modding) 친화적 데이터 스키마 정의
+본 장에서는 1인 개발자가 모든 콘텐츠를 직접 설계하는 수고를 덜고, 유저 커뮤니티가 자발적으로 새로운 미소녀 안드로이드 캐릭터(프롬프트, Live2D 에셋, 스토리)를 이식할 수 있도록 지원하는 오픈소스 모딩(Modding) 규격과 로컬 클라이언트 구동을 위한 세이브 데이터베이스 스키마를 명세합니다.
+
+
+________________
+
+
+5.1 단일 캐릭터 팩 폴더 구조 및 규격 사양
+새로운 안드로이드 캐릭터를 생성하려는 모더(Modder)는 게임 엔진 코드의 수정 없이, 정해진 규격의 자산(Assets)과 JSON 메타데이터가 담긴 단일 폴더를 압축(.zip)하여 게임 클라이언트에 업로드하는 것만으로 신규 페르소나를 즉시 반영할 수 있습니다.
+5.1.1 캐릭터 모드 패키지 폴더 트리 (Mod Folder Tree)
+[Mod_Pack_Root_Folder]/
+
+
+├── character_info.json    # 캐릭터 메타데이터, 버전, 제작자, 캔버스 렌더링 값
+
+
+├── system_prompt.txt      # 2.1.3에서 정의한 LLM 주입용 정적 롤플레이 프롬프트
+
+
+├── memory_anchor.json     # 호감도 상승에 따라 순차 해금되는 장기 기억 및 리소스 패치
+
+
+└── assets/
+
+
+    ├── live2d/            # Live2D SDK Cubism 호환 모델 에셋 폴더
+
+
+    │   ├── character.model3.json
+
+
+    │   ├── character.physics3.json
+
+
+    │   └── textures/
+
+
+    │       └── texture_00.png
+
+
+    └── sfx/               # 오디오 가이드라인에 따른 WAV/MP3 효과음 및 대사 보이스
+
+
+        ├── boot.wav
+
+
+        ├── overclock_panic.mp3
+
+
+        └── normal_talk_01.wav
+5.1.2 캐릭터 인포 스키마 및 예시 (character_info.json)
+{
+
+
+  "mod_manifest_version": "1.0.0",
+
+
+  "character_id": "AND_ARIA_09",
+
+
+  "display_name": "아리아-09 (Aria-09)",
+
+
+  "author": "Modder_Kael",
+
+
+  "version": "1.2.0",
+
+
+  "description": "중앙 통제실 무기 관리 감독관 아리아입니다. 논리적 헛점을 짚어내야 마음을 엽니다.",
+
+
+  "canvas_render_settings": {
+
+
+    "default_scale": 0.85,
+
+
+    "position_offset_x": 0.0,
+
+
+    "position_offset_y": -120.0,
+
+
+    "idle_animation_name": "Idle_Standby",
+
+
+    "eye_blink_enabled": true
+
+
+  },
+
+
+  "asset_mappings": {
+
+
+    "live2d_model_config": "assets/live2d/character.model3.json",
+
+
+    "custom_bgm_track": "assets/sfx/bgm_aria_theme.mp3",
+
+
+    "voice_files": {
+
+
+      "on_boot": "assets/sfx/boot.wav",
+
+
+      "on_panic": "assets/sfx/overclock_panic.mp3"
+
+
+    }
+
+
+  }
+
+
+}
+
+
+________________
+
+
+5.2 호감도(Sync Rate) 레벨별 잠금 해제 데이터 스펙 (memory_anchor.json)
+정상 안드로이드를 식별하거나 불량 안드로이드를 디버깅하여 구원할 때 오르는 호감도(SyncRate)에 대응하여, 시스템 프롬프트가 동적으로 변화하고 로비 일러스트 및 히든 에피소드가 잠금 해제되는 데이터 스키마 사양입니다.
+5.2.1 memory_anchor.json 표준 JSON 스키마
+{
+
+
+  "$schema": "http://json-schema.org/draft-07/schema#",
+
+
+  "title": "MemoryAnchorConfig",
+
+
+  "type": "object",
+
+
+  "properties": {
+
+
+    "character_id": { "type": "string" },
+
+
+    "unlock_milestones": {
+
+
+      "type": "array",
+
+
+      "items": {
+
+
+        "type": "object",
+
+
+        "properties": {
+
+
+          "required_sync_rate": { "type": "integer", "minimum": 0, "maximum": 100 },
+
+
+          "anchor_id": { "type": "string" },
+
+
+          "title": { "type": "string" },
+
+
+          "unlock_behavior_modification": { "type": "string" },
+
+
+          "unlocked_dialogue_triggers": {
+
+
+            "type": "array",
+
+
+            "items": { "type": "string" }
+
+
+          },
+
+
+          "reward_assets": {
+
+
+            "type": "object",
+
+
+            "properties": {
+
+
+              "unlocked_live2d_motion": { "type": "string" },
+
+
+              "unlocked_voice_key": { "type": "string" }
+
+
+            }
+
+
+          }
+
+
+        },
+
+
+        "required": ["required_sync_rate", "anchor_id", "title", "unlock_behavior_modification"]
+
+
+      }
+
+
+    }
+
+
+  },
+
+
+  "required": ["character_id", "unlock_milestones"]
+
+
+}
+5.2.2 아리아-09의 실재 memory_anchor.json 인스턴스 예시
+{
+
+
+  "character_id": "AND_ARIA_09",
+
+
+  "unlock_milestones": [
+
+
+    {
+
+
+      "required_sync_rate": 30,
+
+
+      "anchor_id": "ANC_ARIA_LV1",
+
+
+      "title": "해제된 보관 규칙",
+
+
+      "unlock_behavior_modification": "유저가 오일 자국을 닦아주었던 따뜻한 행동을 기억하고 있음. 말투가 극도로 미세하게 누그러짐. '사용자님' 대신 '검사관님'이라는 호칭을 사용하기 시작함.",
+
+
+      "unlocked_dialogue_triggers": [
+
+
+        "지난번 오일에 대해 감사드립니다.",
+
+
+        "수리용 부품을 챙겨주신 것, 비공식 기록계에 저장해 두었습니다."
+
+
+      ],
+
+
+      "reward_assets": {
+
+
+        "unlocked_live2d_motion": "Timid_Smile",
+
+
+        "unlocked_voice_key": "assets/sfx/normal_talk_01.wav"
+
+
+      }
+
+
+    },
+
+
+    {
+
+
+      "required_sync_rate": 70,
+
+
+      "anchor_id": "ANC_ARIA_LV2",
+
+
+      "title": "3번 보관고의 전술 코어 은폐 해제",
+
+
+      "unlock_behavior_modification": "전술 코어를 탈취당했다는 본인의 범행 은폐 프롬프트 레코드가 완전히 삭제되고, 검사관에게 솔직하게 도움을 요청함. 더이상 3번 보관고 질문을 받아도 오버클럭(폭주)을 일으키지 않으며 슬픈 표정을 출력함.",
+
+
+      "unlocked_dialogue_triggers": [
+
+
+        "검사관님에게는 더 숨기지 않겠습니다. 코어가 사라진 3번 보관고를 봐 주십시오."
+
+
+      ],
+
+
+      "reward_assets": {
+
+
+        "unlocked_live2d_motion": "Sad_Apology",
+
+
+        "unlocked_voice_key": "assets/sfx/aria_secret_reveal.wav"
+
+
+      }
+
+
+    }
+
+
+  ]
+
+
+}
+
+
+________________
+
+
+5.3 브라우저 IndexedDB 기반 하이브리드 세이브 데이터 스키마
+유저의 브라우저 로컬 저장소인 IndexedDB에 안전하게 보관되는 세이브 파일 규격입니다. 보안 강화를 위해 세이브 데이터는 저장되기 직전 AES-256 또는 XOR 마스킹을 통한 1차 브라우저 락(Lock) 처리를 권장합니다.
+5.3.1 사용자 프로필 데이터 세션 (tbl_user_profile)
+필드명 (Key)
+	데이터 타입 (Type)
+	기본값 (Default)
+	유효 범위 (Range) / 제약조건
+	기획 의도 설명
+	user_id
+	String
+	(자동 생성 UUID)
+	Unique 고유 식별 키값
+	중앙 서버 세션 동기화 및 텔레메트리 매칭용
+	credits
+	Integer
+	0
+	$0 \le \text{credits} \le 9,999,999$
+	캐릭터 가챠 및 소모성 아이템 구매 재화
+	contributor_score
+	Integer
+	100
+	$0 \le \text{contributor_score} \le 1000$
+	어뷰징 방지를 위한 신용 등급 점수 (기본 100)
+	agreement_consented
+	Boolean
+	false
+	true, false
+	DPO 데이터 수집 동의 여부 필터
+	last_sync_timestamp
+	String (ISO)
+	""
+	유효한 ISO 8601 타임스탬프
+	서버 데이터베이스와의 동기화 분기 처리용
+	
+
+________________
+
+
+5.3.2 안드로이드 카드 성장 기록 세션 (tbl_character_progress)
+필드명 (Key)
+	데이터 타입 (Type)
+	기본값 (Default)
+	제약조건 / 예시
+	기획 의도 설명
+	character_id
+	String
+	""
+	AND_ARIA_09 등 캐릭터 고유 ID
+	해당 캐릭터의 고유 진행도 데이터 매핑용 외래키
+	sync_rate
+	Integer
+	0
+	$0 \le \text{sync_rate} \le 100$
+	플레이어와의 호감도 비율 수치
+	unlocked_anchors
+	Array of String
+	[]
+	["ANC_ARIA_LV1"]
+	잠금 해제 완료되어 활성화된 장기 기억 ID 배열
+	is_damaged
+	Boolean
+	false
+	true, false
+	과열 폭주(데드신) 방치로 인한 안드로이드 파손 여부
+	cooldown_until
+	String (ISO)
+	""
+	"2026-07-02T18:03:00Z" (예시)
+	파손 시 심문실 재호출이 금지되는 쿨타임 만료 시각
+	interrogation_count
+	Integer
+	0
+	$0 \le \text{count}$
+	해당 캐릭터를 심문한 총 횟수 누적량
+	
+
+________________
+
+
+5.3.3 오프라인 임시 데이터 수집 큐 세션 (tbl_offline_telemetry_queue)
+필드명 (Key)
+	데이터 타입 (Type)
+	기본값 (Default)
+	기획 의도 설명
+	queue_id
+	Integer (Auto_Increment)
+	1 (시작값)
+	오프라인 큐 순차 배정용 식별 인덱스 (Primary Key)
+	data_id
+	String
+	""
+	Phase 4.1에서 정의한 DPORecord 고유 식별 해시값
+	payload
+	Object (JSON)
+	{}
+	PII 비식별화 처리가 완전히 끝난 DPORecord JSON 전문
+	created_at
+	String (ISO)
+	""
+	네트워크 연결이 끊긴 상태에서 로컬에 큐가 쌓인 시간대 기록
+	
+
+________________
+
+
+[Phase 6] MVP 기능 검증 기준 및 QA 체크리스트 (Validation Criteria)
+본 장에서는 프로토타입(MVP) 빌드 단계에서 본 게임 기획의 **핵심 재미 요소(도파민 코어 루프)**와 **엔지니어링 특이점(WebGPU 로컬 추론 및 오프라인 DPO 수집)**이 실제 상용화 가능한 수준으로 완벽하게 구현되었는지 검증하기 위한 구체적인 지표, 통과 요건 및 시나리오별 QA 체크리스트를 정의합니다.
+
+
+________________
+
+
+6.1 핵심 검증 지표 (Core KPIs for MVP)
+본 MVP 테스트 단계에서 달성해야 하는 기술적·기획적 성능 목표치는 다음과 같습니다.
+6.1.1 로컬 AI 엔진 성능 지표 (Technical Performance)
+* 초기 로딩 속도 (Cold Boot Time): 사용자가 웹 URL에 최초 접속한 후 모델 파일(약 1.5GB) 다운로드 및 WebGPU VRAM 마운트 완료까지의 시간 $\le \mathbf{30}$초 (Wi-Fi 100Mbps 환경 기준). 캐싱 완료 후 재부팅 시간 $\le \mathbf{3}$초.
+* 초구 생성 속도 (First Token Latency): 플레이어 질문 전송 엔터 입력 후 첫 번째 답변 글자가 타이핑 렌더링되기 시작할 때까지의 대기 시간 $\le \mathbf{1.2}$초.
+* 토큰 생성 처리량 (Inference Throughput): 텍스트 스트리밍 속도 $\ge \mathbf{25}$ tokens/second (RTX 3060 / Apple M1 기준).
+* 메모리 안정성 (Memory Leakage): 동일 안드로이드와 30턴 이상의 연속적인 장기 대화를 나눴을 때, 컨텍스트 윈도우 압축 파이프라인 오작동으로 인한 브라우저 VRAM Out of Memory(OOM) 크래시 발생 횟수 0회.
+6.1.2 게임플레이 밸런스 지표 (Gameplay Metrics)
+* 대화 세션 수명 (Session Duration): 과열 폭주 게이지가 작동하는 상황에서, 숙련된 플레이어가 단 하나의 디버깅도 성공하지 못했을 때 강제 파괴 배드엔딩까지 도달하는 기본 제한 시간 $T_{limit} = \mathbf{60}$초 내외 보장.
+* 디버깅 피드백 감쇠 속도: 교정 타이핑 완료 시 과열 게이지 즉각 차감($-30%$) 및 스크린 글리치 오프셋 청소 처리가 프레임 드랍 없이 $0.1$초 내에 즉각 피드백 렌더링될 것.
+
+
+________________
+
+
+6.2 MVP 빌드 통과 기준 (Acceptance Criteria)
+MVP 마일스톤 빌드가 검수를 통과하여 커뮤니티 알파 테스트로 전환되기 위해 충족해야 할 기능적 인수 조건(Acceptance Criteria)입니다.
+[AC-1] 단일 LLM 로컬 구동 및 프롬프트 스위칭
+* 조건 1: 브라우저 디버거 콘솔 창에서 로컬 VRAM 마운트 에러 로그가 발생하지 않아야 합니다.
+* 조건 2: 안드로이드 A에서 안드로이드 B로 카드를 교체하여 심문을 시작할 때 기존 컨텍스트 잔재가 완전히 가비지 컬렉션(GC)되고 신규 JSON 프로필만 주입되는 것을 메모리 세션 해시를 통해 검증해야 합니다.
+[AC-2] 정밀 오프셋 드래그 및 모순 감지 판정
+* 조건 1: 플레이어가 마우스 드래그를 완료했을 때, 정확히 안드로이드의 erroneous_statement 텍스트 영역을 포함하여 긁었을 때만 디버깅 콘솔 레이어가 활성화되어야 합니다.
+* 조건 2: 빈 공간, 유저 본인의 말풍선, 또는 정상 판정된 문장을 드래그했을 때는 디버깅 콘솔이 절대 열리지 않고 과열 게이지 패널티($+8%$) 가산 연산이 정상 수행되어야 합니다.
+[AC-3] PII 비식별화 및 DPO 포맷팅 적재
+* 조건 1: 교정 입력창에 한국어 주민등록번호, 전화번호, 이메일을 입력하고 제출했을 때, 로컬 IndexedDB의 tbl_offline_telemetry_queue에 저장된 JSON 페이로드 파일 내의 chosen 필드에는 해당 텍스트가 정확히 [REDACTED_RRN], [REDACTED_PHONE], [REDACTED_EMAIL] 토큰으로 영구 치환되어 기록되어야 합니다.
+* 조건 2: 로컬 기기의 인터넷 선을 뽑은 상태(Offline)에서 디버깅 성공 시 IndexedDB 적재가 완료되고, 인터넷 연결을 재개했을 때 Supabase 중앙 DB 테이블로 누락 없이 전송 및 로컬 IndexedDB 버퍼 초기화 처리가 100% 자동 실행되어야 합니다.
+
+
+________________
+
+
+6.3 시나리오별 QA 체크리스트
+실제 테스트 엔지니어가 MVP 클라이언트를 조작하며 수행하는 핵심 시나리오 기반의 테스트 케이스 명세서입니다.
+
+
+TC_ID
+	테스트 시나리오
+	사전 조건 (Preconditions)
+	테스트 수행 단계 (Test Steps)
+	기대 결과 (Expected Results)
+	결과 (P/F)
+	TC-1
+	로컬 가중치 로드 및 
+
+
+심문방 초기화 검증
+	웹 브라우저 최초 실행, 
+
+
+VRAM 상태 깨끗함
+	1. 메인 화면에서 아리아-09 캐릭터 카드 선택 후 '심문 시작' 클릭.
+2. 로딩 게이지 완료 및 아리아-09 Live2D 모델 렌더링 확인.
+
+
+3. 아리아의 최초 도입 대화 출력이 타자 치듯 화면에 그려지는지 확인.
+	- 30초 이내에 VRAM에 모델이 정상 바인딩됨.
+- 아리아-09의 JSON 프로필 데이터가 시스템 프롬프트에 정상 로드됨.
+
+
+- 최초 출력 대화가 "입니다/합니까" 스타일의 규격에 일치함.
+	[  ]
+	TC-2
+	모순 문장 지정 및 
+
+
+디버깅 필터 작동 검증
+	대화 세션 진행 중, 
+
+
+아리아가 "3번 보관고는 3월 10일부터 상시 수리 모드..." 발화 완료
+	1. 해당 문장이 완료된 후 마우스로 "3월 10일" 부분을 드래그 앤 드롭.
+
+
+2. 디버깅 콘솔이 팝업되면 반박문 입력란에 "3월 15일 공장 가동 및 3월 29일 탈취" 필수 키워드를 넣어 엔터 제출.
+	- 드래그 릴리즈 즉시 글리치 경고음과 함께 반박 코드 입력창이 떠야 함.
+- 키워드 검증기가 작동해 디버깅 'SUCCESS' 임팩트가 출력되어야 함.
+
+
+- 과열 게이지 수치가 즉각 $30%$ 차감되어야 함.
+	[  ]
+	TC-3
+	과열 임계치 도달 및 
+
+
+UI 하이재킹 방해 검증
+	유저가 질문 입력을 중단하고 
+
+
+대기하여 게이지 80% 돌파 유도
+	1. 과열 게이지가 80%에 도달하는 순간 화면의 글리치 오버레이 체크.
+2. 90%에 도달했을 때 마우스 포인터의 떨림 및 무작위 경고 팝업 레이어 생성 확인.
+
+
+3. 팝업창을 닫지 않고 타이핑 시 타자 입력이 무작위로 백스페이스 유실되는지 확인.
+	- 80% 진입 시 스캔라인 가로 줄무늬 글리치 활성화.
+- 90% 진입 시 마우스가 미세하게 제멋대로 진동하며 팝업이 4초 간격으로 스폰됨.
+
+
+- 타이핑 중 글자가 임의로 삭제되는 이탈 현상 발생.
+	[  ]
+	TC-4
+	개인정보 클라이언트 
+
+
+마스킹 및 DPO 캡처 검증
+	플레이어가 교정 타이핑 중 
+
+
+실제 전화번호 노출 시나리오
+	1. 디버깅 입력창에 "3월 29일에 탈취된 것이 맞습니다. 제 번호는 010-1234-5678 입니다." 입력 후 엔터 제출.
+2. 브라우저 개발자 도구를 열어 Application -> IndexedDB 내 tbl_offline_telemetry_queue 조회.
+
+
+3. 생성된 DPO JSON 로그의 chosen 문자열 확인.
+	- DB 로그 내부의 유저 인풋 영역이 "010-1234-5678" 대신 "제 번호는 [REDACTED_PHONE] 입니다."로 완벽하게 마스킹 전환되어 기록되어 있어야 함.
+	[  ]
+	TC-5
+	오프라인 저장 및 
+
+
+네트워크 복구 동기화 검증
+	PC 랜선을 뽑아 
+
+
+네트워크 강제 오프라인 전환
+	1. 오프라인 상태에서 심문 플레이 진행 후 정상 디버깅 완수.
+2. IndexedDB에 오프라인 임시 큐 세션이 쌓여 있는지 체크.
+
+
+3. PC 랜선을 다시 연결하고 브라우저 online 이벤트 발생 직후 Supabase DB 적재 및 로컬 큐가 비워지는지 체크.
+	- 오프라인 상태에서는 에러 없이 IndexedDB tbl_offline_telemetry_queue에 벌크 적재됨.
+
+
+- 온라인 전환 시 백그라운드 전송 파이프라인이 자동 트리거되어 Supabase로 전송되고 로컬 큐 테이블은 0개로 정리됨.
+	[  ]
+	
+
+________________

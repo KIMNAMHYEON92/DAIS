@@ -1,3 +1,6 @@
+/**
+ * Top-level scene state controlled by the Global State Machine.
+ */
 export type GlobalGameState =
   | 'INIT'
   | 'MAIN_LOBBY'
@@ -7,20 +10,45 @@ export type GlobalGameState =
   | 'RESULT_SUMMARY'
   | 'CROSS_VAL_MINIGAME';
 
-export type InterrogationTurnState =
+/**
+ * Micro-interaction state for one interrogation turn.
+ */
+export type TurnSessionState =
   | 'SESSION_START'
   | 'USER_WAIT'
   | 'NPC_THINKING'
   | 'NPC_STREAMING'
   | 'CONTRADICTION_DRAGGED'
   | 'TYPING_CORRECTION'
-  | 'OVERCLOCK_SPIKE'
   | 'UI_HIJACKED'
   | 'DEATH_SEQUENCE'
   | 'SESSION_END';
 
-export interface StateTransition<State extends string, Event extends string> {
-  readonly from: State;
-  readonly event: Event;
-  readonly to: State;
+/**
+ * Android persona state derived from the overclock gauge.
+ */
+export type AndroidPersonaState = 'STABLE' | 'SUSPICIOUS' | 'UNSTABLE' | 'OVERCLOCKED' | 'DEACTIVATED' | 'CALIBRATED';
+
+/**
+ * Mutable session data shared by the independent state machines.
+ */
+export interface GameSessionContext {
+  credits: number;
+  contributorScore: number;
+  syncRate: number;
+  overclockGauge: number;
+  sessionTimer: number;
+  debugTimer: number;
+  panicTimer: number;
+  isDamaged: boolean;
+  dragLock: boolean;
+}
+
+/**
+ * A state transition request with an optional, typed payload.
+ */
+export interface FsmEvent<TState, TPayload = Record<string, unknown>> {
+  type: string;
+  targetState: TState;
+  payload?: TPayload;
 }

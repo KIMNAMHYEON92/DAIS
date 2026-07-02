@@ -22,7 +22,7 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@types/*": ["src/types/*"],
+      "@app-types/*": ["src/types/*"],
       "@core/*": ["src/core/*"],
       "@infrastructure/*": ["src/infrastructure/*"],
       "@view/*": ["src/view/*"],

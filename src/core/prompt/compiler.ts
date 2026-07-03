@@ -1,5 +1,7 @@
 import type { CharacterPack } from '@app-types/character';
 
+const JSON_INDENTATION = 2;
+
 export class PromptCompiler {
   /**
    * Compiles a structured character pack into the system prompt consumed by
@@ -30,7 +32,7 @@ export class PromptCompiler {
         behavior_guardrails: pack.behaviorGuardrails,
       },
       null,
-      2,
+      JSON_INDENTATION,
     );
 
     return `[SYSTEM PROTOCOL: ROLEPLAY ENGINE]

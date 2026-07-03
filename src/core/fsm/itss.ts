@@ -10,10 +10,10 @@ export class InterrogationStateMachine {
 
   private readonly transitionMap: Record<TurnSessionState, ReadonlySet<TurnSessionState>> = {
     SESSION_START: new Set(['USER_WAIT']),
-    USER_WAIT: new Set(['NPC_THINKING', 'CONTRADICTION_DRAGGED']),
-    NPC_THINKING: new Set(['NPC_STREAMING']),
+    USER_WAIT: new Set(['NPC_THINKING', 'CONTRADICTION_DRAGGED', 'DEATH_SEQUENCE']),
+    NPC_THINKING: new Set(['NPC_STREAMING', 'DEATH_SEQUENCE']),
     NPC_STREAMING: new Set(['USER_WAIT', 'DEATH_SEQUENCE']),
-    CONTRADICTION_DRAGGED: new Set(['TYPING_CORRECTION', 'USER_WAIT']),
+    CONTRADICTION_DRAGGED: new Set(['TYPING_CORRECTION', 'USER_WAIT', 'DEATH_SEQUENCE']),
     TYPING_CORRECTION: new Set(['USER_WAIT', 'UI_HIJACKED', 'DEATH_SEQUENCE']),
     UI_HIJACKED: new Set(['USER_WAIT', 'DEATH_SEQUENCE']),
     DEATH_SEQUENCE: new Set(['SESSION_END']),

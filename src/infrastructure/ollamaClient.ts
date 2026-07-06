@@ -7,12 +7,16 @@ export interface OllamaStreamingOptions {
   onError: (error: Error) => void;
 }
 
+export interface LocalStreamingClient {
+  streamChat(options: OllamaStreamingOptions): Promise<void>;
+}
+
 interface OllamaGenerateChunk {
   response?: unknown;
   error?: unknown;
 }
 
-export class OllamaLocalClient {
+export class OllamaLocalClient implements LocalStreamingClient {
   private readonly baseUrl = 'http://localhost:11434';
 
   public async streamChat(options: OllamaStreamingOptions): Promise<void> {

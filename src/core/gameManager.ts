@@ -13,9 +13,14 @@ import { TelemetrySyncDispatcher } from '@core/sync/syncDispatcher';
 import { DeterministicTypingValidator } from '@core/validator/typingValidator';
 import { OverclockEngine } from '@core/validator/overclockEngine';
 import { DatabaseManager } from '@infrastructure/indexeddb/databaseManager';
-import { OllamaLocalClient } from '@infrastructure/ollamaClient';
+import type { LocalStreamingClient } from '@infrastructure/ollamaClient';
 import type { CharacterPack } from '@app-types/character';
-import { DATABASE_STORES, type DpoRecordPayload } from '@app-types/database';
+import {
+  DATABASE_STORES,
+  type CharacterProgressEntity,
+  type DpoRecordPayload,
+  type UserProfileEntity,
+} from '@app-types/database';
 import type { GameSessionContext } from '@app-types/fsm';
 import type { CapturedDragData, DialogueEntity, MatchingRuleConfig } from '@app-types/parser';
 import type { UiBridge } from '@app-types/uiBridge';
@@ -24,6 +29,16 @@ import type { ValidationRules } from '@app-types/validator';
 interface DialoguePair {
   user: string;
   assistant: string;
+}
+
+export interface GameSessionSnapshot {
+  state: 'INTERROGATION_ACTIVE' | 'VERDICT_PHASE' | 'RESULT_SUMMARY';
+  overclockGauge: number;
+  syncRate: number;
+  credits: number;
+  sessionTimeRemaining: number;
+  isStreaming: boolean;
+  isDamaged: boolean;
 }
 
 const DEFAULT_VALIDATION_RULES: Readonly<ValidationRules> = {
@@ -53,16 +68,40 @@ export class GameManager {
   private activeRuleIndex = -1;
   private lastSuccessfulCorrection = '';
   private lastUserQuery = '';
+  private savedCharacterProgress: CharacterProgressEntity | null = null;
 
   public constructor(
     private readonly ui: UiBridge,
     private readonly db: DatabaseManager,
-    private readonly ollama: OllamaLocalClient,
+    private readonly ollama: LocalStreamingClient,
     private readonly telemetry: TelemetrySyncDispatcher,
   ) {}
 
+  public getSessionSnapshot(): GameSessionSnapshot {
+    const context = this.gms.getContext();
+    const state = this.gms.getState();
+    if (state !== 'INTERROGATION_ACTIVE' && state !== 'VERDICT_PHASE' && state !== 'RESULT_SUMMARY') {
+      throw new Error(`[GAME_MANAGER_ERROR] Session snapshot unavailable in ${state}.`);
+    }
+
+    return {
+      state,
+      overclockGauge: context.overclockGauge,
+      syncRate: context.syncRate,
+      credits: context.credits,
+      sessionTimeRemaining: Math.max(0, 180 - this.cumulativeTime),
+      isStreaming: this.isNpcStreamingActive,
+      isDamaged: context.isDamaged,
+    };
+  }
+
   public async initializeInterrogationSession(pack: CharacterPack): Promise<void> {
     await this.db.open();
+    const savedProfile = await this.db.get<UserProfileEntity>(DATABASE_STORES.userProfile, 'USER_UUID_2026');
+    this.savedCharacterProgress = await this.db.get<CharacterProgressEntity>(
+      DATABASE_STORES.characterProgress,
+      pack.characterId,
+    );
 
     this.currentCharacterPack = pack;
     this.dialogueHistory.clear();
@@ -75,8 +114,8 @@ export class GameManager {
     this.lastUserQuery = '';
 
     const initialContext: GameSessionContext = {
-      credits: 100,
-      contributorScore: 100,
+      credits: savedProfile?.credits ?? 100,
+      contributorScore: savedProfile?.contributor_score ?? 100,
       syncRate: 0,
       overclockGauge: 0,
       sessionTimer: 180,
@@ -288,29 +327,37 @@ export class GameManager {
       });
     }
 
-    const activeRule = this.currentCharacterPack.hallucinationRules[this.activeRuleIndex];
-    const chosen = PiiAnonymizer.sanitize(
-      this.lastSuccessfulCorrection || activeRule?.correctFact || '교정 사실 복원본',
+    const cumulativeSyncRate = Math.min(
+      100,
+      (this.savedCharacterProgress?.sync_rate ?? 0) + this.gms.getContext().syncRate,
     );
-    const dpoRecord: DpoRecordPayload = {
-      data_id: `DPO_${this.currentCharacterPack.characterId}_${Date.now()}`,
-      meta_info: {
-        character_id: this.currentCharacterPack.characterId,
-        client_version: 'v1.0.0-mvp',
-        timestamp: new Date().toISOString(),
-        turn_index: this.localTurnCounter,
-      },
-      system_prompt: PromptCompiler.compile(this.currentCharacterPack),
-      history_context: this.conversationHistory.flatMap((pair) => [
-        { role: 'user' as const, content: pair.user },
-        { role: 'assistant' as const, content: pair.assistant },
-      ]),
-      prompt: this.lastUserQuery || '질의문',
-      rejected: activeRule?.erroneousStatement || this.conversationHistory.at(-1)?.assistant || '',
-      chosen,
-    };
+    this.gms.updateContext((context) => {
+      context.syncRate = cumulativeSyncRate;
+    });
 
-    await this.telemetry.queueTelemetry(dpoRecord);
+    const activeRule = this.currentCharacterPack.hallucinationRules[this.activeRuleIndex];
+    if (this.lastSuccessfulCorrection !== '') {
+      const chosen = PiiAnonymizer.sanitize(this.lastSuccessfulCorrection);
+      const dpoRecord: DpoRecordPayload = {
+        data_id: `DPO_${this.currentCharacterPack.characterId}_${Date.now()}`,
+        meta_info: {
+          character_id: this.currentCharacterPack.characterId,
+          client_version: 'v1.0.0-mvp',
+          timestamp: new Date().toISOString(),
+          turn_index: this.localTurnCounter,
+        },
+        system_prompt: PromptCompiler.compile(this.currentCharacterPack),
+        history_context: this.conversationHistory.flatMap((pair) => [
+          { role: 'user' as const, content: pair.user },
+          { role: 'assistant' as const, content: pair.assistant },
+        ]),
+        prompt: this.lastUserQuery || '질의문',
+        rejected: activeRule?.erroneousStatement || this.conversationHistory.at(-1)?.assistant || '',
+        chosen,
+      };
+
+      await this.telemetry.queueTelemetry(dpoRecord);
+    }
     const now = new Date().toISOString();
     await this.db.put(DATABASE_STORES.userProfile, {
       user_id: 'USER_UUID_2026',
@@ -321,11 +368,11 @@ export class GameManager {
     });
     await this.db.put(DATABASE_STORES.characterProgress, {
       character_id: this.currentCharacterPack.characterId,
-      sync_rate: this.gms.getContext().syncRate,
-      unlocked_anchors: [],
+      sync_rate: cumulativeSyncRate,
+      unlocked_anchors: this.resolveUnlockedAnchors(cumulativeSyncRate),
       is_damaged: false,
       cooldown_until: '',
-      interrogation_count: 1,
+      interrogation_count: (this.savedCharacterProgress?.interrogation_count ?? 0) + 1,
     });
 
     this.gms.transition({ type: 'COMPLETE_SUMMARY', targetState: 'RESULT_SUMMARY' });
@@ -398,5 +445,29 @@ export class GameManager {
     this.applyPersonaMetadata();
     this.ui.playStaticSfx(1);
     this.ui.showSummaryScreen(false, 0, 0);
+    void this.persistDamagedProgress();
+  }
+
+  private resolveUnlockedAnchors(syncRate: number): string[] {
+    const anchors = new Set(this.savedCharacterProgress?.unlocked_anchors ?? []);
+    if (syncRate >= 30) {
+      anchors.add('ANC_ARIA_LV1');
+    }
+    if (syncRate >= 70) {
+      anchors.add('ANC_ARIA_LV2');
+    }
+    return Array.from(anchors);
+  }
+
+  private async persistDamagedProgress(): Promise<void> {
+    const cooldownUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await this.db.put(DATABASE_STORES.characterProgress, {
+      character_id: this.currentCharacterPack.characterId,
+      sync_rate: this.savedCharacterProgress?.sync_rate ?? 0,
+      unlocked_anchors: this.savedCharacterProgress?.unlocked_anchors ?? [],
+      is_damaged: true,
+      cooldown_until: cooldownUntil,
+      interrogation_count: (this.savedCharacterProgress?.interrogation_count ?? 0) + 1,
+    });
   }
 }

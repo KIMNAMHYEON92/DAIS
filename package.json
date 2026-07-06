@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:m9": "vitest run tests/integration/qaValidator.spec.ts",
     "test:m10": "vitest run tests/integration/gameSystemIntegration.spec.ts",
+    "test:demo": "vitest run tests/integration/playableDemo.spec.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
